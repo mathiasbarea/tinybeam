@@ -159,11 +159,12 @@ platform adapters `node.js` and `cloudflare.js`.
 
 1. Spec: events, identity, consent modes, wire format ([`docs/spec.md`](docs/spec.md)).
 2. Browser core (done) and modules (sections, Web Vitals), with a size budget in CI.
-3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent mode, minimal
-   dashboard.
-4. First destinations: GA4 Measurement Protocol and Meta Conversions API.
-5. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).
-6. A hosted collector for sites that don't want to run one.
+3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent mode.
+4. The portal, on a URL the owner chooses: sites, filters, transformations, destinations and dashboards,
+   with no terminal needed ([`docs/portal.md`](docs/portal.md)).
+5. First destinations: GA4 Measurement Protocol and Meta Conversions API.
+6. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).
+7. A hosted service running the same portal and collector, for sites that don't want to run one.
 
 ## License
 
