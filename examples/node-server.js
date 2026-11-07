@@ -6,7 +6,9 @@ import { serve, sqliteStorage } from '../collector/node.js';
 
 const collector = createCollector({
   storage: await sqliteStorage(process.env.TINYBEAM_DB || 'tinybeam.db'),
-  // sites: [{ id: 'my-site', origins: ['https://example.com'] }],
+  // One entry per site: its ID (generate one with `npm run site-id`), a name, and the origins its pages
+  // are served from. The pages' script tag carries the same ID in data-site.
+  sites: [{ id: process.env.TINYBEAM_SITE_ID || 'replace-me', name: 'My site', origins: ['https://example.com'] }],
 });
 
 const port = Number(process.env.PORT || 8787);

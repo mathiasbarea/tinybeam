@@ -14,7 +14,7 @@ async function load({
   url = 'https://example.com/pricing/?utm_source=news',
   referrer = 'https://chatgpt.com/',
   body = '',
-  attrs = { 'data-pv': 'server-pv' },
+  attrs = { 'data-site': 'site1', 'data-pv': 'server-pv' },
   beacon = true,
   setup = () => {},
 } = {}) {
@@ -70,6 +70,7 @@ test('sends a page view with the envelope as soon as the loaded page runs it', a
   const [batch] = sent;
   assert.equal(batch.endpoint, '/tb/e');
   assert.equal(batch.v, 1);
+  assert.equal(batch.s, 'site1');
   assert.equal(batch.u, 'https://example.com/pricing/?utm_source=news');
   assert.equal(batch.pv, 'server-pv');
   assert.equal(batch.tx, 'b');
@@ -80,7 +81,7 @@ test('sends a page view with the envelope as soon as the loaded page runs it', a
 });
 
 test('uses a configured endpoint and generates a page view ID when the server gives none', async () => {
-  const { sent } = await load({ attrs: { 'data-endpoint': '/collect' }, referrer: '' });
+  const { sent } = await load({ attrs: { 'data-site': 'site1', 'data-endpoint': '/collect' }, referrer: '' });
   assert.equal(sent[0].endpoint, '/collect');
   assert.match(sent[0].pv, /^[0-9a-z]{16,28}$/);
   assert.deepEqual(sent[0].e[0].p, { title: 'Pricing' });
@@ -185,9 +186,18 @@ test('a page restored from the back/forward cache is a new page view', async () 
   assert.notEqual(views[1].pv, views[0].pv);
 });
 
+test('without data-site it measures nothing and says why', async () => {
+  const warnings = [];
+  const { window, sent } = await load({ attrs: {}, setup(window) { window.console.warn = m => warnings.push(m); } });
+  assert.equal(sent.length, 0);
+  assert.equal(window.tinybeam, undefined);
+  assert.deepEqual(warnings, ['tinybeam: data-site is missing']);
+});
+
 test('loading the script twice measures once', async () => {
   const { window, sent } = await load();
   const again = window.document.createElement('script');
+  again.setAttribute('data-site', 'site1');
   again.textContent = code['tinybeam.js'];
   window.document.head.appendChild(again);
   assert.equal(sent.length, 1);

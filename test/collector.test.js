@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createCollector, memoryStorage, sqlStorage } from '../collector/index.js';
+import { createCollector, memoryStorage, newSiteId, sqlStorage } from '../collector/index.js';
 import { classifyBot } from '../collector/bots.js';
 import { classifyReferrer, campaign, parseUserAgent } from '../collector/enrich.js';
 import { cloudflareContext, d1Driver } from '../collector/cloudflare.js';
@@ -11,17 +11,18 @@ const SAFARI_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) Ap
 
 const batch = (events, extra = {}) => ({
   v: 1, u: 'https://example.com/pricing/?utm_source=news&utm_medium=email&q=shoes', l: 'en-US',
-  sw: 390, sh: 844, vw: 390, vh: 664, tz: 'America/Montevideo', pv: 'pv1', tx: 'b', e: events, ...extra,
+  sw: 390, sh: 844, vw: 390, vh: 664, tz: 'America/Montevideo', pv: 'pv1', tx: 'b', s: 'site1', e: events, ...extra,
 });
 const post = (body, headers = {}) => new Request('https://example.com/tb/e', {
   method: 'POST',
   headers: { 'content-type': 'text/plain', 'user-agent': CHROME_MAC, ...headers },
   body: typeof body === 'string' ? body : JSON.stringify(body),
 });
+const SITES = [{ id: 'site1', origins: ['https://example.com'] }];
 const setup = (options = {}) => {
   const storage = memoryStorage();
   let clock = 1_762_531_200_000;
-  const collector = createCollector({ storage, now: () => clock, ...options });
+  const collector = createCollector({ storage, sites: SITES, now: () => clock, ...options });
   return { collector, records: storage.records, advance: ms => { clock += ms; } };
 };
 
@@ -32,7 +33,7 @@ test('stores an enriched page view, plus the search derived from its URL', async
   assert.equal(records.length, 2);
   const [view, search] = records;
   assert.equal(view.name, 'page_view');
-  assert.equal(view.site, 'example.com');
+  assert.equal(view.site, 'site1');
   assert.equal(view.kind, 'event');
   assert.equal(view.source, 'script');
   assert.equal(view.js, 'on');
@@ -107,6 +108,17 @@ test('with sites configured, only their origins are accepted, and CORS allows th
   assert.equal((await collector.handle(post(batch([], { s: 'acme' }), { origin: 'https://evil.example' }))).status, 403);
   assert.equal((await collector.handle(post(batch([], { s: 'other' })))).status, 403, 'page URL not in the site origins');
   assert.equal((await collector.handle(post(batch([], { s: 'nope' })))).status, 403);
+  assert.equal((await collector.handle(post(batch([], { s: undefined })))).status, 403, 'a site ID is always required');
+});
+
+test('sites can come from an async registry, and are required', async () => {
+  const registry = { abc123: { id: 'abc123', origins: ['https://example.com'] } };
+  const { collector, records } = setup({ sites: async id => registry[id] || null });
+  assert.equal((await collector.handle(post(batch([{ n: 'x', t: 1, p: {} }], { s: 'abc123' })))).status, 204);
+  assert.equal((await collector.handle(post(batch([], { s: 'zzz' })))).status, 403);
+  assert.equal(records[0].site, 'abc123');
+  assert.throws(() => createCollector({}), /sites/);
+  assert.match(newSiteId(), /^[a-z0-9]{12}$/);
 });
 
 test('marks automated browsers and bots that run the script as bot traffic', async () => {
@@ -122,7 +134,7 @@ test('marks automated browsers and bots that run the script as bot traffic', asy
 
 test('the noscript pixel records a page view with JavaScript off', async () => {
   const { collector, records } = setup();
-  const res = await collector.handle(new Request('https://example.com/tb/n', { headers: { referer: 'https://example.com/about/', 'user-agent': SAFARI_IPHONE } }), {});
+  const res = await collector.handle(new Request('https://example.com/tb/n?s=site1', { headers: { referer: 'https://example.com/about/', 'user-agent': SAFARI_IPHONE } }), {});
   assert.equal(res.headers.get('content-type'), 'image/gif');
   assert.equal(records.length, 1);
   assert.deepEqual([records[0].name, records[0].source, records[0].js, records[0].path, records[0].device, records[0].os], ['page_view', 'noscript', 'off', '/about/', 'mobile', 'iOS']);
@@ -134,11 +146,12 @@ test('observe: server-side page views for humans, every request for bots', async
   const css = new Response('', { headers: { 'content-type': 'text/css' } });
   const page = (path, ua) => new Request('https://example.com' + path, { headers: { 'user-agent': ua, referer: 'https://www.google.com/' } });
 
-  const pv = await collector.observe(page('/pricing/', CHROME_MAC), html, {});
+  const pv = await collector.observe(page('/pricing/', CHROME_MAC), html, { site: 'site1' });
   assert.match(pv, /^[0-9a-f]{32}$/);
-  assert.equal(await collector.observe(page('/app.css', CHROME_MAC), css, {}), null);
-  await collector.observe(page('/llms.txt', 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)'), new Response('', { status: 200, headers: { 'content-type': 'text/plain' } }), { verifiedBotCategory: 'AI Crawler' });
-  await collector.observe(page('/', 'curl/8.7.1'), html, {});
+  assert.equal(await collector.observe(page('/app.css', CHROME_MAC), css, { site: 'site1' }), null);
+  await collector.observe(page('/llms.txt', 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)'), new Response('', { status: 200, headers: { 'content-type': 'text/plain' } }), { site: 'site1', verifiedBotCategory: 'AI Crawler' });
+  await collector.observe(page('/', 'curl/8.7.1'), html, { site: 'site1' });
+  assert.equal(await collector.observe(page('/', CHROME_MAC), html, {}), null, 'no site, nothing recorded');
 
   assert.deepEqual(records.map(r => [r.kind, r.source, r.name, r.js, r.path, r.referrer_type, r.bot_name, r.bot_category, r.bot_verified, r.special_file]), [
     ['event', 'server', 'page_view', 'unknown', '/pricing/', 'search', null, null, null, undefined],
@@ -197,7 +210,7 @@ test('classifies where visits come from', () => {
 
 test('sqlStorage writes rows through a driver (SQLite via node:sqlite)', async () => {
   const storage = await sqliteStorage(':memory:');
-  const collector = createCollector({ storage });
+  const collector = createCollector({ storage, sites: SITES });
   await collector.handle(post(batch([{ n: 'page_view', t: 1, p: { title: 'Pricing' } }, { n: 'signup_click', t: 2, p: { plan: 'pro' } }])), {});
   const rows = storage.driver.db.prepare('SELECT name, title, props, automation FROM tinybeam_events ORDER BY rowid').all();
   assert.deepEqual(rows.map(r => ({ ...r })), [
@@ -214,7 +227,7 @@ test('the D1 driver batches inserts', async () => {
     prepare: sql => ({ bind: (...params) => ({ sql, params }) }),
     batch: async statements => calls.push(['batch', statements.length]),
   };
-  const collector = createCollector({ storage: sqlStorage(d1Driver(db)) });
+  const collector = createCollector({ storage: sqlStorage(d1Driver(db)), sites: SITES });
   await collector.handle(post(batch([{ n: 'a', t: 1, p: {} }, { n: 'b', t: 2, p: {} }])), {});
   assert.deepEqual(calls, [['exec', true], ['batch', 2]]);
 });
@@ -231,7 +244,7 @@ test('the Cloudflare context comes from request.cf', () => {
 
 test('the Node.js adapter serves the collector over HTTP', async () => {
   const storage = memoryStorage();
-  const server = await serve(createCollector({ storage }), { port: 0, host: '127.0.0.1' });
+  const server = await serve(createCollector({ storage, sites: SITES }), { port: 0, host: '127.0.0.1' });
   try {
     const { port } = server.address();
     const res = await fetch(`http://127.0.0.1:${port}/tb/e`, { method: 'POST', body: JSON.stringify(batch([{ n: 'page_view', t: 1, p: {} }])), headers: { 'user-agent': SAFARI_IPHONE } });

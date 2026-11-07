@@ -11,10 +11,12 @@
 
   const script = d.currentScript;
   const attr = (name, fallback) => (script && script.getAttribute('data-' + name)) || fallback;
-  // The collector can be the site's own (default) or anywhere else, such as a hosted one; `data-site`
-  // tells a collector that serves several sites which one this is.
-  const endpoint = attr('endpoint', '/tb/e');
+  // Every site has an ID (data-site), self-hosted or not; the collector rejects batches without one, so
+  // without it the script doesn't measure. The collector can be the site's own (default) or anywhere
+  // else, such as a hosted one.
   const site = attr('site');
+  if (!site) return console.warn('tinybeam: data-site is missing');
+  const endpoint = attr('endpoint', '/tb/e');
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   let queue = [];

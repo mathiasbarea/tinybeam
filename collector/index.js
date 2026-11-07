@@ -10,7 +10,6 @@ import { memoryStorage } from './storage.js';
 
 const DEFAULTS = {
   path: '/tb', // the script posts to `${path}/e`; the noscript pixel is `${path}/n`
-  sites: null, // [{ id, origins: ['https://example.com'] }]; null accepts any site (single-site self-hosting)
   searchParams: ['q', 's', 'query'],
   downloads: ['pdf', 'zip', 'csv', 'xls', 'xlsx', 'doc', 'docx', 'ppt', 'pptx', 'txt', 'mp3', 'mp4', 'mov',
     'dmg', 'exe', 'msi', 'apk', 'epub', 'rar', '7z', 'gz'],
@@ -68,16 +67,22 @@ const httpUrl = value => {
 
 export function createCollector(options = {}) {
   const config = { ...DEFAULTS, ...options };
+  // Every site has an ID, whether the collector is self-hosted for one site or hosted for many: the script
+  // sends it (data-site) and the collector only accepts registered sites. `sites` is a list, or a function
+  // `async id => site | null` for a registry kept elsewhere (a database, an admin UI).
+  if (!config.sites) throw new Error('tinybeam: `sites` is required, for example [{ id, origins: [...] }]');
+  const findSite = Array.isArray(config.sites)
+    ? id => config.sites.find(site => site.id === id) || null
+    : config.sites;
   const storage = config.storage || memoryStorage();
   const salt = config.salt || dailySalt();
   const sessions = config.sessions || memorySessions(config.sessionTimeout);
   const now = config.now || Date.now;
 
-  // The site a request belongs to, or null when it isn't allowed. With `sites` configured, both the page
-  // URL and the Origin header (when present) must be one of the site's origins.
-  const resolveSite = (siteId, pageUrl, origin) => {
-    if (!config.sites) return siteId || pageUrl.host;
-    const site = config.sites.find(s => s.id === siteId) || (!siteId && config.sites.length === 1 ? config.sites[0] : null);
+  // The site ID when the request may be recorded for it, or null: the site must exist, and both the page
+  // URL and the Origin header (when present) must be one of its origins.
+  const resolveSite = async (siteId, pageUrl, origin) => {
+    const site = siteId ? await findSite(siteId) : null;
     if (!site) return null;
     const allowed = site.origins || [];
     if (!allowed.includes(pageUrl.origin) || (origin && !allowed.includes(origin))) return null;
@@ -146,7 +151,7 @@ export function createCollector(options = {}) {
     try { body = JSON.parse(text); } catch { return new Response('Bad Request', { status: 400 }); }
     const pageUrl = body && body.v === 1 && Array.isArray(body.e) && body.e.length <= config.maxEvents && httpUrl(body.u);
     if (!pageUrl) return new Response('Bad Request', { status: 400 });
-    const site = resolveSite(typeof body.s === 'string' ? body.s : null, pageUrl, origin);
+    const site = await resolveSite(typeof body.s === 'string' ? body.s : null, pageUrl, origin);
     if (!site) return new Response('Forbidden', { status: 403 });
 
     const shared = {
@@ -194,11 +199,11 @@ export function createCollector(options = {}) {
     return new Response(null, { status: 204, headers: corsHeaders(origin) });
   }
 
-  // GET `${path}/n` from <noscript><img src="/tb/n?s=site"></noscript>: a page view with JavaScript off.
+  // GET `${path}/n?s=<site ID>` from the page's <noscript><img>: a page view with JavaScript off.
   // The page URL comes from the Referer header.
   async function noscript(request, context) {
     const pageUrl = httpUrl(request.headers.get('referer'));
-    const site = pageUrl && resolveSite(new URL(request.url).searchParams.get('s'), pageUrl, null);
+    const site = pageUrl && await resolveSite(new URL(request.url).searchParams.get('s'), pageUrl, null);
     if (site) {
       const fields = await clientFields(request, context, site);
       await store([{ ...fields, ...pageFields(pageUrl, null, null), kind: 'event', source: 'noscript', js: 'off', name: 'page_view', props: {} }], context);
@@ -217,11 +222,11 @@ export function createCollector(options = {}) {
   // For a collector in front of the site: records a request the site answered. Bots are recorded for
   // every request passed in; humans only for HTML pages, as server-side page views with js "unknown" (the
   // script, when it runs, adds its own records with the same `pv`). Returns the page view ID to give the
-  // script (data-pv), or null.
+  // script (data-pv), or null. `context.site` names the site.
   async function observe(request, response, context = {}) {
     const pageUrl = httpUrl(request.url);
     if (!pageUrl || request.method !== 'GET') return null;
-    const site = resolveSite(context.site || null, pageUrl, null);
+    const site = await resolveSite(context.site, pageUrl, null);
     if (!site) return null;
     const fields = await clientFields(request, context, site);
     const isHtml = (response.headers.get('content-type') || '').startsWith('text/html');
@@ -237,6 +242,9 @@ export function createCollector(options = {}) {
 
   return { handle, observe, config };
 }
+
+// A new random site ID: 12 lowercase letters and digits.
+export const newSiteId = () => [...crypto.getRandomValues(new Uint8Array(12))].map(b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
 
 export { memoryStorage, sqlStorage, COLUMNS } from './storage.js';
 export { classifyBot, BOTS } from './bots.js';

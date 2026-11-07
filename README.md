@@ -88,22 +88,28 @@ tinybeam.js ── sendBeacon ──▶   POST /tb/e
 **1. Add the script** to your pages. It can be served from your own domain (recommended):
 
 ```html
-<script src="/tb/tinybeam.js" data-pv defer></script>
+<script src="/tb/tinybeam.js" data-site="YOUR_SITE_ID" data-pv defer></script>
 ```
 
 | Attribute | Meaning |
 | --- | --- |
 | `data-endpoint` | Where to send events. Default `/tb/e` on the same site; can be a full URL to a collector elsewhere. |
-| `data-site` | Site ID, for a collector that serves several sites. |
+| `data-site` | **Required.** The site's ID, registered in the collector. Without it the script doesn't measure. |
 | `data-pv` | Left empty; a collector in front of the site fills in the page view ID (see below). |
 
 Optionally, to count visitors with JavaScript disabled:
 
 ```html
-<noscript><img src="/tb/n" alt="" width="1" height="1"></noscript>
+<noscript><img src="/tb/n?s=YOUR_SITE_ID" alt="" width="1" height="1"></noscript>
 ```
 
-**2. Run a collector.** Three ways, all with the same code:
+**2. Register the site.** Every site has an ID, whether you run your own collector for one site or use
+a collector shared by many. Generate one with `npm run site-id` and list it in the collector's `sites`
+with the origins its pages are served from; the collector only accepts registered sites and origins. A
+collector with a site registry elsewhere (a database, an admin UI) passes `sites` as a function
+`async id => site | null`.
+
+**3. Run a collector.** Three ways, all with the same code:
 
 - **Standalone on Node.js** (22.5+), storing in SQLite: [`examples/node-server.js`](examples/node-server.js).
   Route `/tb/` on your domain to it with your reverse proxy (nginx, Caddy, your host's rewrites) to keep
@@ -121,12 +127,13 @@ import { createCollector, sqlStorage } from 'tinybeam/collector';
 
 const collector = createCollector({
   storage: sqlStorage(myDriver), // { exec(sql), run(sql, params) } over any SQL client
-  sites: [{ id: 'my-site', origins: ['https://example.com'] }], // optional; omit for a single site
+  sites: [{ id: 'k3v9x2m7q1za', name: 'Example', origins: ['https://example.com'] }],
 });
 ```
 
 `context` carries what the platform knows about the client: `ip` (used only to compute the daily
-anonymous ID, never stored), `country`/`region`/`city`, `verifiedBotCategory` and `waitUntil`. Adapters
+anonymous ID, never stored), `country`/`region`/`city`, `verifiedBotCategory` and `waitUntil`, plus
+`site` when calling `observe`. Adapters
 fill it in; without one, country is read from common CDN headers.
 
 ## Development
@@ -146,7 +153,7 @@ platform adapters `node.js` and `cloudflare.js`.
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
-| `tinybeam.js` | Core, including History API navigations | 1,105 B | 1,536 B |
+| `tinybeam.js` | Core, including History API navigations | 1,133 B | 1,536 B |
 
 ## Roadmap
 

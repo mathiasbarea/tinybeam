@@ -21,7 +21,7 @@ be reported together with the base it comes from.
 ## 2. Loading
 
 ```html
-<script src="/tb/tinybeam.js" data-endpoint="/tb/e" defer></script>
+<script src="/tb/tinybeam.js" data-site="SITE_ID" data-pv defer></script>
 ```
 
 - One file per site: the modules the site uses are selected at build time and bundled with the core.
@@ -33,7 +33,8 @@ be reported together with the base it comes from.
   the visitor actually opens it.
 - Configuration comes from `data-*` attributes on the script tag:
   - `data-endpoint`: collector path (default `/tb/e`),
-  - `data-site`: site ID, for a collector that serves several sites (sent as `s`),
+  - `data-site`: **required**, the site's ID (sent as `s`). Without it the script doesn't measure and logs a
+    warning,
   - `data-pv`: left empty in the page; a collector in front of the site fills in the page view ID it
     assigned (section 7). Empty means the script generates one.
 - Neutral paths (`/tb/`) are recommended; names such as `analytics.js` are commonly blocked by filter lists.
@@ -210,10 +211,15 @@ or a hosted collector serving many sites.
 
 ### Sites
 
-Without `sites`, the collector accepts any page and uses the page's host as the site ID (single-site
-self-hosting). With `sites: [{ id, origins }]`, a batch must name its site (`s`, from `data-site`; optional
-when there is only one site), its page URL must be one of the site's origins, and so must the `Origin`
-header when the browser sends one; anything else gets `403`. Responses allow those origins through CORS, so
+Every site has an ID, in every setup: one self-hosted collector for one site, one for many, or a hosted
+service. Adding a site (by hand in the configuration today, from an admin UI later) means giving it a name
+and its origins and getting an ID back (`newSiteId()`: 12 lowercase letters and digits). So moving between
+self-hosting and a hosted collector only changes the endpoint, never the data model.
+
+`sites` is required: a list of `{ id, name, origins }`, or `async id => site | null` for a registry kept
+elsewhere. A batch must name its site (`s`), its page URL must be one of the site's origins, and so must
+the `Origin` header when the browser sends one; anything else gets `403`. The noscript pixel names it as
+`?s=`, and `observe` takes it as `context.site`. Responses allow those origins through CORS, so
 a collector on another domain works too.
 
 ### Enrichment
@@ -239,7 +245,7 @@ A page view can reach the collector three ways, and each record says which ones 
 | Source | How | Requires |
 | --- | --- | --- |
 | Server | The collector logs every HTML request it serves | The collector in front of the site (for example a Cloudflare Worker) |
-| Noscript | `<noscript><img src="/tb/n" alt="" width="1" height="1"></noscript>` in the page; only browsers with JavaScript off load it. The page URL comes from the `Referer` header; a collector with several sites takes the site ID as `?s=` | Nothing extra |
+| Noscript | `<noscript><img src="/tb/n?s=SITE_ID" alt="" width="1" height="1"></noscript>` in the page; only browsers with JavaScript off load it. The page URL comes from the `Referer` header | Nothing extra |
 | Script | The browser script | JavaScript |
 
 From those, each page view gets `js`:
@@ -382,3 +388,4 @@ Settled during review (2026-11-07):
 10. **The page view is sent as soon as the script runs**, not after the `load` event.
 11. **The collector runs anywhere** (web-standard APIs, platform adapters), and the script can send to a
     collector on another domain, so the same code serves self-hosting and a hosted service.
+12. **The site ID is always required**, self-hosted or hosted, with one site or many.
