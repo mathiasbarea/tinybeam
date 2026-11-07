@@ -85,56 +85,49 @@ tinybeam.js ── sendBeacon ──▶   POST /tb/e
 
 ## Using it
 
-**1. Add the script** to your pages. It can be served from your own domain (recommended):
+**1. Run Tinybeam.** One server holds the collector (which receives events) and the portal (where you
+manage sites), sharing one SQL database:
+
+```sh
+npm install
+npm start        # builds the script, then serves http://localhost:8787/portal/ (SQLite in tinybeam.db)
+```
+
+Open the portal, create the owner account, and add a site with its name and origins. The portal gives you
+the site's ID and the snippet to paste. Put the server behind your domain with a reverse proxy: `/tb/` on
+your site (so collection is first-party) and the portal wherever you like (a subdomain, a path, another
+domain you own).
+
+Other ways to run it, same code:
+
+- **In front of your site** (Cloudflare Worker, or any server that sees your page requests):
+  [`examples/cloudflare-worker.js`](examples/cloudflare-worker.js). Besides the script's events it records
+  server-side page views (visits whose browser never ran the script) and every bot request.
+- **Inside your own server**: `createTinybeam({ driver }).handle(request, context)` takes a standard
+  `Request` and returns a `Response`, so it mounts in any framework that speaks web-standard requests
+  (Hono, Next.js route handlers, Remix, SvelteKit, Deno, Bun…). The Node.js adapter (`fromNode`, `toNode`)
+  covers Express-style servers. The collector alone is `createCollector` in `tinybeam/collector`.
+
+`driver` is any SQL client wrapped in `{ exec(sql), run(sql, params), all(sql, params) }`; SQLite
+(`sqliteDriver` in `tinybeam/collector/node`) and Cloudflare D1 (`d1Driver`) are included. `context` carries
+what the platform knows about the client: `ip` (used only to compute the daily anonymous ID, never stored),
+`country`/`region`/`city`, `verifiedBotCategory` and `waitUntil`, plus `site` when calling `observe`.
+Adapters fill it in; without one, country is read from common CDN headers.
+
+**2. Add the snippet** the portal shows for the site to every page:
 
 ```html
 <script src="/tb/tinybeam.js" data-site="YOUR_SITE_ID" data-pv defer></script>
+<noscript><img src="/tb/n?s=YOUR_SITE_ID" alt="" width="1" height="1"></noscript>
 ```
 
 | Attribute | Meaning |
 | --- | --- |
+| `data-site` | **Required.** The site's ID. Every site has one, self-hosted or hosted; without it the script doesn't measure. |
 | `data-endpoint` | Where to send events. Default `/tb/e` on the same site; can be a full URL to a collector elsewhere. |
-| `data-site` | **Required.** The site's ID, registered in the collector. Without it the script doesn't measure. |
-| `data-pv` | Left empty; a collector in front of the site fills in the page view ID (see below). |
+| `data-pv` | Left empty; a collector in front of the site fills in the page view ID. |
 
-Optionally, to count visitors with JavaScript disabled:
-
-```html
-<noscript><img src="/tb/n?s=YOUR_SITE_ID" alt="" width="1" height="1"></noscript>
-```
-
-**2. Register the site.** Every site has an ID, whether you run your own collector for one site or use
-a collector shared by many. Generate one with `npm run site-id` and list it in the collector's `sites`
-with the origins its pages are served from; the collector only accepts registered sites and origins. A
-collector with a site registry elsewhere (a database, an admin UI) passes `sites` as a function
-`async id => site | null`.
-
-**3. Run a collector.** Three ways, all with the same code:
-
-- **Standalone on Node.js** (22.5+), storing in SQLite: [`examples/node-server.js`](examples/node-server.js).
-  Route `/tb/` on your domain to it with your reverse proxy (nginx, Caddy, your host's rewrites) to keep
-  it first-party.
-- **In front of your site** (Cloudflare Worker, or any server that sees your page requests):
-  [`examples/cloudflare-worker.js`](examples/cloudflare-worker.js). Besides the script's events it records
-  server-side page views (visits whose browser never ran the script) and every bot request.
-- **Inside your own server**: `collector.handle(request, context)` takes a standard `Request` and returns a
-  `Response`, so it mounts in any framework that speaks web-standard requests (Hono, Next.js route
-  handlers, Remix, SvelteKit, Deno, Bun…). The Node.js adapter (`fromNode`, `toNode`) covers Express-style
-  servers.
-
-```js
-import { createCollector, sqlStorage } from 'tinybeam/collector';
-
-const collector = createCollector({
-  storage: sqlStorage(myDriver), // { exec(sql), run(sql, params) } over any SQL client
-  sites: [{ id: 'k3v9x2m7q1za', name: 'Example', origins: ['https://example.com'] }],
-});
-```
-
-`context` carries what the platform knows about the client: `ip` (used only to compute the daily
-anonymous ID, never stored), `country`/`region`/`city`, `verifiedBotCategory` and `waitUntil`, plus
-`site` when calling `observe`. Adapters
-fill it in; without one, country is read from common CDN headers.
+The `<noscript>` pixel is optional: it counts visitors with JavaScript disabled.
 
 ## Development
 
@@ -144,12 +137,15 @@ Requires Node.js 22.5 or later (SQLite tests use `node:sqlite`).
 | --- | --- |
 | `npm run build` | Builds the bundles into `dist/` and prints their minified and brotli sizes. |
 | `npm run size` | Same, and fails if a bundle is over its budget. |
-| `npm test` | Runs the browser bundles in jsdom (what they send, ES2015 syntax, size budgets) and the collector (validation, enrichment, bots, storage, adapters). |
+| `npm test` | Runs the browser bundles in jsdom (what they send, ES2015 syntax, size budgets), the collector (validation, enrichment, bots, storage, adapters) and the portal (accounts, sites, CSRF). |
+| `npm start` | Builds the script and runs the Node.js server ([`examples/node-server.js`](examples/node-server.js)). |
+| `npm run site-id` | Prints a new random site ID. |
 
 The browser script is `src/core.js`; modules will be build flags in `build.mjs` (code behind a flag that
 is off is dropped from that bundle). The collector is `collector/`: `index.js` (handling and records),
 `enrich.js` (user agent, referrer, campaign, geo), `bots.js` (the bot list), `storage.js`, and the
-platform adapters `node.js` and `cloudflare.js`.
+platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index.js` (pages), `store.js`
+(users, sessions, sites in SQL) and `auth.js` (passwords, tokens). `app.js` puts the two together.
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
@@ -160,8 +156,8 @@ platform adapters `node.js` and `cloudflare.js`.
 1. Spec: events, identity, consent modes, wire format ([`docs/spec.md`](docs/spec.md)).
 2. Browser core (done) and modules (sections, Web Vitals), with a size budget in CI.
 3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent mode.
-4. The portal, on a URL the owner chooses: sites, filters, transformations, destinations and dashboards,
-   with no terminal needed ([`docs/portal.md`](docs/portal.md)).
+4. The portal, on a URL the owner chooses, with no terminal needed ([`docs/portal.md`](docs/portal.md)):
+   owner account and sites (done); roles, filters, dashboards, transformations and destinations next.
 5. First destinations: GA4 Measurement Protocol and Meta Conversions API.
 6. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).
 7. A hosted service running the same portal and collector, for sites that don't want to run one.

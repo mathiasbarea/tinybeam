@@ -9,7 +9,8 @@
     "build": "node build.mjs",
     "size": "node build.mjs --check",
     "test": "node --test",
-    "site-id": "node --input-type=module -e \"import { newSiteId } from './collector/index.js'; console.log(newSiteId())\""
+    "site-id": "node --input-type=module -e \"import { newSiteId } from './collector/index.js'; console.log(newSiteId())\"",
+    "start": "node build.mjs && node examples/node-server.js"
   },
   "devDependencies": {
     "acorn": "^8.19.0",
@@ -17,10 +18,12 @@
     "jsdom": "^31.0.0"
   },
   "exports": {
-    ".": "./collector/index.js",
+    ".": "./app.js",
+    "./app": "./app.js",
     "./collector": "./collector/index.js",
     "./collector/node": "./collector/node.js",
     "./collector/cloudflare": "./collector/cloudflare.js",
+    "./portal": "./portal/index.js",
     "./dist/tinybeam.js": "./dist/tinybeam.js"
   },
   "engines": {

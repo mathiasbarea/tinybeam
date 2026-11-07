@@ -67,9 +67,10 @@ const toRow = record => Object.keys(COLUMNS).map(key => {
   return value;
 });
 
-// Any SQL database, through a minimal driver: { exec(sql), run(sql, params) }, sync or async. `?`
-// placeholders. Drivers for SQLite (node:sqlite) and Cloudflare D1 are in node.js and cloudflare.js; for
-// other databases, wrap your client in the same two methods.
+// Any SQL database, through a minimal driver, sync or async, with `?` placeholders:
+//   { exec(sql), run(sql, params), all(sql, params) -> rows, batch?(sql, rowsOfParams) }
+// Event storage needs exec and run; the portal also needs all. Drivers for SQLite (node:sqlite) and
+// Cloudflare D1 are in node.js and cloudflare.js; for other databases, wrap your client the same way.
 export function sqlStorage(driver, { table = 'tinybeam_events' } = {}) {
   if (!/^\w+$/.test(table)) throw new Error(`Invalid table name: ${table}`);
   const columns = Object.keys(COLUMNS);

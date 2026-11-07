@@ -44,13 +44,19 @@ export function jsonlStorage(path) {
   return { write: batch => appendFile(path, batch.map(record => JSON.stringify(record) + '\n').join('')) };
 }
 
-// SQLite through node:sqlite. `path` is a file, or ':memory:'.
-export async function sqliteStorage(path, options) {
+// A SQL driver over node:sqlite (built into Node.js 22.5+). `path` is a file, or ':memory:'.
+export async function sqliteDriver(path) {
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(path);
-  return sqlStorage({
+  return {
     exec: sql => db.exec(sql),
     run: (sql, params) => db.prepare(sql).run(...params),
+    all: (sql, params) => db.prepare(sql).all(...params).map(row => ({ ...row })),
     db,
-  }, options);
+  };
+}
+
+// Event storage in SQLite.
+export async function sqliteStorage(path, options) {
+  return sqlStorage(await sqliteDriver(path), options);
 }

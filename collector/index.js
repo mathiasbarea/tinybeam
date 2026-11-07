@@ -17,6 +17,7 @@ const DEFAULTS = {
   maxBody: 16 * 1024,
   maxEvents: 50,
   maxProps: 25, // per event; keys up to 40 characters, string values up to 500
+  script: null, // the browser script's code; when set, served at `${path}/tinybeam.js`
 };
 
 const GIF = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), c => c.charCodeAt(0));
@@ -235,6 +236,9 @@ export function createCollector(options = {}) {
     const { pathname } = new URL(request.url);
     if (pathname === `${config.path}/e`) return collect(request, context);
     if (pathname === `${config.path}/n`) return noscript(request, context);
+    if (pathname === `${config.path}/tinybeam.js` && config.script) {
+      return new Response(config.script, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*' } });
+    }
     return new Response('Not Found', { status: 404 });
   }
 

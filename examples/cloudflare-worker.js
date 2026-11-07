@@ -1,24 +1,23 @@
-// A Cloudflare Worker in front of a site: answers the collector routes, serves everything else from the
-// site's assets (or origin), records server-side page views and bot requests, and hands each page its
-// page view ID. Bindings: DB (D1) and ASSETS (static assets) in wrangler.jsonc; vars: SITE_ID and
-// SITE_ORIGIN (for example "https://example.com").
-import { createCollector, sqlStorage } from '../collector/index.js';
+// Tinybeam as a Cloudflare Worker in front of a site: the collector on /tb/, the portal on /portal/ (or
+// route a separate hostname to it), and every other request served from the site's assets (or origin),
+// recording server-side page views and bot requests and handing each page its page view ID.
+// Bindings in wrangler.jsonc: DB (D1), ASSETS (static assets); var SITE_ID (the site's ID from the portal).
+// To serve the script from the collector, import dist/tinybeam.js as a text module and pass it as
+// `script`.
+import { createTinybeam } from '../app.js';
 import { cloudflareContext, d1Driver } from '../collector/cloudflare.js';
 
-let collector;
+let app;
 
 export default {
   async fetch(request, env, ctx) {
-    collector ??= createCollector({
-      storage: sqlStorage(d1Driver(env.DB)),
-      sites: [{ id: env.SITE_ID, origins: [env.SITE_ORIGIN] }],
-    });
+    app ??= createTinybeam({ driver: d1Driver(env.DB) });
     const context = { ...cloudflareContext(request, ctx), site: env.SITE_ID };
     const { pathname } = new URL(request.url);
-    if (pathname.startsWith('/tb/')) return collector.handle(request, context);
+    if (pathname.startsWith('/tb/') || pathname.startsWith('/portal')) return app.handle(request, context);
 
     const response = await env.ASSETS.fetch(request); // or fetch(request) for a site behind an origin
-    const pv = await collector.observe(request, response, context);
+    const pv = await app.collector.observe(request, response, context);
     if (!pv) return response;
     // Give the script the same page view ID, so its events merge with the server's record. The page's
     // script tag carries an empty data-pv attribute for this.

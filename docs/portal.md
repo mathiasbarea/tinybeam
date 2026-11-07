@@ -1,6 +1,8 @@
 # Tinybeam portal (draft)
 
-Status: **draft, not implemented.** This describes the web portal that comes with the collector. It
+Status: **partly implemented.** Done: the owner account (setup, sign-in, sessions) and sites (add, edit,
+pause, delete, snippet), stored in SQL and read by the collector. The rest is a draft. This describes the
+web portal that comes with the collector. It
 complements [`spec.md`](spec.md), which covers the script, the wire format and the collector.
 
 ## Goal
@@ -91,8 +93,8 @@ Per site, with a date range and filters on any dimension:
 
 ## Order of work
 
-1. Configuration in the database (sites, filters) and the collector reading it.
-2. Accounts and the portal shell: sign-in, sites, snippet.
+1. Configuration in the database and the collector reading it (done for sites; filters next).
+2. Accounts and the portal shell: sign-in, sites, snippet (done for the owner; roles and more users next).
 3. Dashboards over the stored events.
 4. Transformations.
 5. Destinations, starting with GA4 Measurement Protocol.

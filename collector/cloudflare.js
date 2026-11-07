@@ -11,9 +11,10 @@ export const cloudflareContext = (request, ctx) => ({
   waitUntil: ctx && ctx.waitUntil ? promise => ctx.waitUntil(promise) : undefined,
 });
 
-// A driver for sqlStorage over a D1 binding; inserts of one batch go in a single D1 batch call.
+// A SQL driver over a D1 binding; inserts of one batch go in a single D1 batch call.
 export const d1Driver = db => ({
   exec: sql => db.exec(sql),
   run: (sql, params) => db.prepare(sql).bind(...params).run(),
+  all: async (sql, params) => (await db.prepare(sql).bind(...params).all()).results,
   batch: (sql, rows) => db.batch(rows.map(row => db.prepare(sql).bind(...row))),
 });
