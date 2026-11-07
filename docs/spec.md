@@ -182,7 +182,11 @@ Destinations are configured in the collector, never in the page:
 | Core + sections | 1.5 KB |
 | Core + all modules | 3 KB |
 
-CI fails if a bundle exceeds its budget.
+- Bundles are minified (whitespace, comments, renamed local variables, and mangled internal property names)
+  and target modern browsers only (ES2020, no polyfills or transpiled legacy syntax).
+- Budgets are measured on the minified bundle compressed with brotli, which is what the browser downloads.
+  The uncompressed minified size is reported too, since that is what the browser parses.
+- CI fails if a bundle exceeds its budget.
 
 ## 10. Decisions
 
