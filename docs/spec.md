@@ -95,9 +95,7 @@ Four scopes, each with its own call:
   follows starts a new one without the previous session's attributes and without the user. In consented
   mode it also gets a new anonymous ID. It deletes nothing already recorded. Page attributes stay, since
   the page is the same.
-- Destinations receive the resolved attributes. Since a later attribute can change a page's earlier
-  events, forwarding a page's events can wait until the page is over (the default) or go out at once and
-  only carry what was known then; this is set per destination.
+- Destinations receive the resolved attributes (section 8).
 
 Derived by the collector from the page URL `u` and the event URLs, so the script doesn't carry that code:
 
@@ -382,6 +380,31 @@ Destinations are configured in the collector, never in the page:
   categories (for example `"bots": ["ai_user_fetch"]`); bot events then carry their category and
   `verified` flag.
 - Delivery goes through a queue with retries, so a slow destination never delays the response to the browser.
+
+### Attributes on forwarded events
+
+Attributes are sent once (section 3), but destinations need them on every event they apply to. So the
+collector resolves them for each forwarded event:
+
+- It keeps the current attributes of each page view, session and user (page: while the page is open;
+  session: until it expires; user: in a user table, since it lasts across sessions) and merges them into
+  each event with the usual precedence (event, page, session, user). An event sent after `setSession`
+  without the attribute still reaches GA4 with it.
+- Each destination maps attributes to what the platform supports, chosen in the portal. In GA4, for
+  example, user attributes can go as user properties and page and session attributes as event parameters;
+  the `setUser` ID goes as `user_id`. What a platform has no place for can't be sent there.
+- Destinations can't be corrected after the fact, so an attribute set late can only reach events not yet
+  forwarded. Each destination chooses when to forward:
+
+  | Mode | Forwards | Complete for |
+  | --- | --- | --- |
+  | Immediate | as each event arrives | attributes set before the event |
+  | End of page (default) | when the page is left or hidden | page attributes |
+  | End of session | 30 min after the last activity | page and session attributes |
+
+  Events keep the time they happened; GA4 and Meta accept late events within their limits (hours to
+  days). The documentation will advise setting attributes as early as possible, ideally with the page
+  view (`data-page-<key>`, or the set calls before the first `track`).
 
 ## 9. Size budget
 
