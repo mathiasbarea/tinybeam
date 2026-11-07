@@ -8,10 +8,15 @@ Decisions taken during review are listed at the end.
 This document defines:
 
 - the events the browser script sends and their fields,
+- how every measurement records whether the browser could take it (capabilities and coverage),
 - the identity model (anonymous ID, session, user ID) and how it maps to destinations,
 - the consent modes,
 - the wire format between the script and the collector,
-- what the collector adds on its own.
+- what the collector adds on its own: enrichment, visits without JavaScript, and bot traffic.
+
+A rule that applies throughout: **a missing value is never silent.** Anything that could not be measured
+says why (not instrumented, not supported by the browser, or supported but no value), so every number can
+be reported together with the base it comes from.
 
 ## 2. Loading
 
@@ -62,7 +67,36 @@ Sent once per section per page view, batched with the page's final `engagement`.
 | `vitals` | `lcp`, `inp`, `cls`, `ttfb`, `fcp` (ms, except `cls`), `nav` (`navigate`, `reload`, `back_forward`, `prerender`) |
 
 One event per page view, sent when the page is hidden. Measured with `PerformanceObserver`, following the
-definitions used by the Chrome UX Report.
+definitions used by the Chrome UX Report. A metric the browser doesn't support is omitted and flagged in
+`cap` (below); a supported metric without a value (for example INP when the visitor never interacted, or
+LCP when the page was hidden before it painted) is sent as `null`.
+
+### Capabilities and coverage
+
+The first batch of each page view carries `cap`: one key per browser feature that an included module
+relies on, with `1` (available) or `0` (missing). Modules that are not in the site's bundle add no keys.
+
+| Key | Feature | Used for |
+| --- | --- | --- |
+| `vis` | Page Visibility API | Counting only visible time in `engagement.ms`; without it, time is wall-clock and flagged |
+| `io` | `IntersectionObserver` | `section_view` |
+| `lcp`, `cls`, `inp`, `fcp`, `ttfb` | `PerformanceObserver` entry types (`largest-contentful-paint`, `layout-shift`, `event` with `interactionId`, `paint`, `navigation`) | The matching `vitals` metric |
+
+The envelope also carries `tx`, the transport that delivered the batch (`b` beacon, `f` fetch keepalive,
+`x` XMLHttpRequest).
+
+So every measurement ends up in exactly one of these states, and the collector keeps them apart:
+
+| State | How it shows | Example |
+| --- | --- | --- |
+| Measured | A value | `inp: 180` |
+| No value | Supported, value `null` | Visitor never interacted, so no INP |
+| Unsupported | `cap` key is `0` | Safari has no INP |
+| Not instrumented | No script data for the page view (`js` is `off` or `unknown`, section 7) or module not bundled | JavaScript disabled |
+
+Every aggregate the collector or a dashboard reports comes with its base, for example: *"INP p75 = 210 ms,
+from 6,210 page views; 1,380 excluded (browser doesn't support INP), 410 without interaction, 95 without
+script data."* Queries can filter on any of these states.
 
 ## 4. Identity
 
@@ -112,6 +146,8 @@ reaches 20 events. Falls back to `fetch(..., { keepalive: true })`.
   "sw": 390, "sh": 844, "vw": 390, "vh": 664,
   "tz": "America/Montevideo",
   "pv": "Ck3n2Vq8TtyQ1f0bH4mR7A",
+  "cap": { "vis": 1, "io": 1, "lcp": 1, "cls": 1, "inp": 0, "fcp": 1, "ttfb": 1 },
+  "tx": "b",
   "e": [
     { "n": "page_view", "t": 1762531200000, "p": { "title": "Pricing", "ref": "https://chatgpt.com/", "utm_source": "newsletter" } },
     { "n": "section_view", "t": 1762531212000, "p": { "id": "plans", "kind": "section", "ms": 8400, "order": 1 } },
@@ -136,21 +172,69 @@ The collector adds, per event:
 - `engaged_session`: true once a session has more than 10 s of visible time, two page views, or a conversion
   event.
 
-### Server-side page views
+### Visits without JavaScript
 
-When the collector also serves the site's HTML (for example a Cloudflare Worker in front of the site), it
-can log a page view for every HTML request from a non-bot client. These count visitors whose browser never
-ran the script. The script sends the page view ID the server assigned (exposed in the HTML), so the
-collector merges both records instead of counting the visit twice.
+A page view can reach the collector three ways, and each record says which ones it got:
 
-### AI traffic
+| Source | How | Requires |
+| --- | --- | --- |
+| Server | The collector logs every HTML request it serves | The collector in front of the site (for example a Cloudflare Worker) |
+| Noscript | `<noscript><img src="/tb/n" alt="" width="1" height="1"></noscript>` in the page; only browsers with JavaScript off load it. The page URL comes from the `Referer` header (same origin) | Nothing extra |
+| Script | The browser script | JavaScript |
 
-The collector can also log, without any browser script:
+From those, each page view gets `js`:
 
-- requests from AI crawlers identified by user agent (GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot,
-  Google-Extended and others), with the path requested, including `llms.txt` and Markdown versions of pages,
-- visits referred by AI assistants (ChatGPT, Perplexity, Gemini, Copilot, Claude), as
-  `referrer_type: ai_assistant`.
+- `on`: the script reported it;
+- `off`: the noscript pixel loaded, so JavaScript was disabled;
+- `unknown`: the server saw the request but neither the script nor the pixel reported (the visitor left
+  before the script ran, the script was blocked or failed, or images were off too).
+
+When the collector serves the HTML it adds the page view ID to the script tag (streaming, with
+`HTMLRewriter` on Cloudflare), so the script's events merge into the server's record instead of counting
+the visit twice. Without it, records are matched by anonymous ID, URL and time.
+
+### Bot traffic
+
+Every request the collector sees is classified as `human` or `bot`. Human reports exclude bots by default;
+bots go to their own dataset, where they can be analyzed separately. Most bots never run JavaScript, so this
+needs the collector in front of the site; with the script alone, only bots that execute JavaScript are seen
+(and flagged, see the signals below).
+
+**Classification**, in order:
+
+1. **Known bots** by user agent, from a maintained list (data, not code): name and category.
+2. **Verification**, where possible: the platform's verified-bot signal (for example Cloudflare's
+   `request.cf.verifiedBotCategory`) or the IP ranges / reverse DNS that major operators publish (Google,
+   Bing, OpenAI, Anthropic, Apple and others). Each bot record has `verified: true | false`. A user agent
+   that claims to be a known bot but fails verification is recorded as `claimed_unverified`.
+3. **Generic signals**: no user agent, `bot` / `crawler` / `spider` in it, HTTP libraries (`curl`,
+   `python-requests`, `Go-http-client`), headless browsers, and `navigator.webdriver` when the script runs.
+   These are bots of category `unidentified` (or `automation` / `http_client` when that much is known).
+
+Sophisticated bots that imitate browsers can still pass as humans; no tool catches all of them.
+
+| Category | Examples |
+| --- | --- |
+| `search` | Googlebot, Bingbot, Applebot, DuckDuckBot, YandexBot, Baiduspider |
+| `ai_training` | GPTBot, ClaudeBot, CCBot, Meta-ExternalAgent, Bytespider |
+| `ai_search` | OAI-SearchBot, Claude-SearchBot, PerplexityBot |
+| `ai_user_fetch` | ChatGPT-User, Claude-User, Perplexity-User (a person asked an assistant to read the page) |
+| `social_preview` | facebookexternalhit, Twitterbot, LinkedInBot, Slackbot, WhatsApp, Discordbot, TelegramBot |
+| `ads` | AdsBot-Google, Google-adstxt |
+| `seo_tool` | AhrefsBot, SemrushBot, MJ12bot, DotBot |
+| `monitoring` | UptimeRobot, Pingdom, Better Stack |
+| `feed` | Feedly and other feed readers |
+| `http_client` | curl, python-requests, Go-http-client |
+| `automation` | Headless Chrome, Playwright, Selenium |
+| `unidentified` | Looks like a bot, no known identity |
+
+**What is recorded per bot request:** time, path, status code, response size, bot name, category,
+`verified`, country and network (ASN; not the IP), and whether the path is a special file (`robots.txt`,
+`sitemap.xml`, `llms.txt`, Markdown versions of pages). That answers questions such as how often Meta's or
+Google's bots come, which pages AI crawlers read, and whether they follow `llms.txt`.
+
+Visits referred by AI assistants (ChatGPT, Perplexity, Gemini, Copilot, Claude) are human traffic and are
+marked `referrer_type: ai_assistant`.
 
 ## 8. Destinations
 
@@ -179,6 +263,9 @@ Destinations are configured in the collector, never in the page:
 
 - `events` maps Tinybeam event names to destination names; unmapped events are not sent.
 - `consent` sets the minimum consent mode for that destination.
+- Bot traffic is never forwarded by default. A destination can opt in with `"bots": true` or a list of
+  categories (for example `"bots": ["ai_user_fetch"]`); bot events then carry their category and
+  `verified` flag.
 - Delivery goes through a queue with retries, so a slow destination never delays the response to the browser.
 
 ## 9. Size budget
@@ -193,13 +280,13 @@ Destinations are configured in the collector, never in the page:
 - Old browsers are measured, not dropped. The source sticks to syntax that every browser since 2017 parses
   (ES2015: no optional chaining, nullish coalescing or class fields), which costs almost nothing in size,
   and the minifier never emits newer syntax. No polyfills are shipped: each browser API is feature-detected
-  and the script degrades instead of failing:
+  and the script degrades instead of failing, always recording what was missing (`cap`, section 3):
   - sending: `navigator.sendBeacon`, then `fetch` with `keepalive`, then `XMLHttpRequest`;
   - sections: skipped where `IntersectionObserver` is missing;
   - vitals: each metric is sent only where the browser exposes it (INP, for example, is Chromium-only).
 - Browsers that can't run the script at all (very old ones, or with JavaScript disabled) are still counted:
-  the collector can log page views from the HTML requests themselves (section 7), with the same enrichment
-  and without engagement data.
+  the collector logs page views from the HTML requests themselves or the noscript pixel (section 7), with
+  the same enrichment and without engagement data.
 - Budgets are measured on the minified bundle compressed with brotli, which is what the browser downloads.
   The uncompressed minified size is reported too, since that is what the browser parses.
 - CI fails if a bundle exceeds its budget.
@@ -218,3 +305,8 @@ Settled during review (2026-11-07):
 5. **Event names** follow GA4 where an equivalent exists (`page_view`, `search`, `sign_up`, `login`,
    `generate_lead`); Tinybeam names are used only for what GA4 doesn't have (`engagement`, `section_view`,
    `vitals`, `outbound`, `download`).
+6. **Missing data is explicit.** Every measurement is measured, no value, unsupported or not instrumented,
+   and every aggregate reports its base (section 3).
+7. **Visits without JavaScript count**, through server-side page views and a noscript pixel (section 7).
+8. **Bots are measured separately**, classified by name and category with verification where possible,
+   excluded from human reports and from destinations unless opted in (sections 7 and 8).

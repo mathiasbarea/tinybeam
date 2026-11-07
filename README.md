@@ -35,8 +35,11 @@ Tinybeam takes the opposite approach:
    stored. No fingerprinting. Respects Global Privacy Control.
 4. **One identity, many destinations.** Tinybeam owns a stable anonymous ID and translates it for each
    destination (for example GA4 `client_id`, Meta `external_id`, Clarity `identify`).
-5. **Modular.** Each site ships only the modules it uses.
-6. **Edge-native.** The reference collector targets Cloudflare Workers (Analytics Engine, Queues, R2),
+5. **Honest about gaps.** Old browsers are measured, not dropped. Whatever a browser can't measure is
+   flagged instead of silently missing, so every number comes with the base it was computed from (for
+   example, how many visitors were excluded from INP because their browser doesn't support it).
+6. **Modular.** Each site ships only the modules it uses.
+7. **Edge-native.** The reference collector targets Cloudflare Workers (Analytics Engine, Queues, R2),
    with no servers to run. The wire format is documented so other collectors can exist.
 
 ## What it measures
@@ -51,7 +54,10 @@ Tinybeam takes the opposite approach:
 | Web Vitals | LCP, INP, CLS, TTFB from real visitors | Browser (module) |
 | Context | Device, browser, OS, country, region | Collector |
 | Sessions | Sessions, new vs. returning (with consent), engaged sessions | Collector |
-| AI traffic | AI crawler requests (GPTBot, ClaudeBot, PerplexityBot…) and visits referred by AI assistants | Collector |
+| Coverage | Which browser features were available, so gaps are counted instead of hidden | Browser (core) |
+| Visits without JavaScript | Page views from the HTML requests themselves and a noscript pixel | Collector |
+| Bot traffic | Every identifiable bot by name and category (search, AI crawlers, social previews, SEO tools…), verified where possible, plus unidentified bots. Kept apart from human traffic and not forwarded to destinations unless you opt in | Collector |
+| AI referrals | Visits referred by AI assistants (ChatGPT, Perplexity, Gemini…) | Collector |
 
 ## Non-goals
 
