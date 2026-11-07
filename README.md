@@ -6,7 +6,8 @@ Tinybeam is a tiny browser script plus a collector that runs on your own domain.
 people actually do on a page and sends it to your server; your server enriches the events and forwards them
 to wherever you want them: your own storage, GA4, Meta, or any other destination.
 
-> **Status: design phase.** There is no code yet. The event and identity model is being drafted in
+> **Status: early development.** The browser core is written and tested; the modules (sections, Web
+> Vitals) and the collector are next. The event and identity model is drafted in
 > [`docs/spec.md`](docs/spec.md). Feedback is welcome in issues.
 
 ## Why
@@ -80,10 +81,28 @@ tinybeam.js ── sendBeacon ──▶   POST /tb/e
                                                                         Meta Conversions API, …
 ```
 
+## Development
+
+Requires Node.js 20 or later.
+
+| Command | What it does |
+| --- | --- |
+| `npm run build` | Builds the bundles into `dist/` and prints their minified and brotli sizes. |
+| `npm run size` | Same, and fails if a bundle is over its budget. |
+| `npm test` | Runs the bundles in jsdom and checks what they send, that they parse as ES2015 and fit their budgets. |
+
+The source is `src/core.js`. Modules are build flags in `build.mjs`: code behind a flag that is off is
+dropped from that bundle.
+
+| Bundle | Contents | Size (brotli) | Budget |
+| --- | --- | --- | --- |
+| `tinybeam.js` | Core | 1,022 B | 1,024 B |
+| `tinybeam.spa.js` | Core + History API navigations | 1,125 B | 1,152 B |
+
 ## Roadmap
 
 1. Spec: events, identity, consent modes, wire format ([`docs/spec.md`](docs/spec.md)).
-2. Browser core and modules, with a size budget in CI.
+2. Browser core (done) and modules, with a size budget in CI.
 3. Reference collector for Cloudflare Workers, with storage and a minimal dashboard.
 4. First destinations: GA4 Measurement Protocol and Meta Conversions API.
 5. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).

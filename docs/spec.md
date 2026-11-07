@@ -25,10 +25,16 @@ be reported together with the base it comes from.
 ```
 
 - One file per site: the modules the site uses are selected at build time and bundled with the core.
+  Available today: the core (`tinybeam.js`) and core + SPA navigation (`tinybeam.spa.js`).
 - Served from the site's own origin with long-lived, immutable caching (hashed file name in builds).
-- Does nothing until the page has loaded; work is scheduled with `requestIdleCallback` where available.
-- Configuration comes from `data-*` attributes on the script tag or from `tinybeam.init({...})`.
+- Starts once the page has loaded, and sends the `page_view` right then. A prerendered page (speculation
+  rules) waits until the visitor actually opens it. Visitors who leave before the page loads are still
+  counted by server-side page views (section 7).
+- Configuration comes from `data-*` attributes on the script tag:
+  - `data-endpoint`: collector path (default `/tb/e`),
+  - `data-pv`: the page view ID assigned by the server, when the collector serves the HTML (section 7).
 - Neutral paths (`/tb/`) are recommended; names such as `analytics.js` are commonly blocked by filter lists.
+- Page API: `tinybeam.track(name, props)` queues a custom event; `tinybeam.flush()` sends the queue now.
 
 ## 3. Events
 
@@ -38,15 +44,22 @@ Every event shares an envelope (section 6). Event-specific fields go in `p` (pro
 
 | Event | When | Properties |
 | --- | --- | --- |
-| `page_view` | Page load and SPA navigations (History API) | `title`, `ref` (referrer), `utm_*`, click IDs (`gclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`) |
-| `engagement` | When the page is hidden or unloaded, and on SPA navigation | `ms` (visible time since the last `engagement`), `scroll` (max depth reached: 0, 25, 50, 75, 100) |
-| `outbound` | Click on a link to another host | `url` |
-| `download` | Click on a link to a file (configurable extensions) | `url`, `ext` |
-| `search` | Page view whose URL has a configured search parameter (`q`, `s`, `query`) | `term` |
+| `page_view` | Page load, restore from the back/forward cache, and History API navigations (SPA bundle) | `title`, `ref` (referrer, when there is one) |
+| `engagement` | When the page is hidden, and before an SPA navigation; not sent when no visible time passed | `ms` (visible time since the last `engagement`), `scroll` (max depth reached: 0, 25, 50, 75, 100) |
+| `outbound` | Click (or middle click) on a link to another host | `url` |
+| `download` | Click on a link with a `download` attribute or whose path ends in a file extension other than a web page (`.html`, `.htm`, `.php`, `.asp`, `.aspx`) | `url` |
 | custom | `tinybeam.track(name, props)` or click on an element with `data-tb-event` | free-form, flat, string/number/boolean values |
 
 `data-tb-event="signup_click"` on an element sends that event on click; `data-tb-prop-<key>="value"`
-attributes become its properties.
+attributes become its properties. Clicks are sent right away, since they may leave the page.
+
+Derived by the collector from the page URL `u` and the event URLs, so the script doesn't carry that code:
+
+| Event or field | From |
+| --- | --- |
+| `utm_*` and click IDs (`gclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`) on the `page_view` | `u` |
+| `search` event with `term` | `u`, when it has a configured search parameter (`q`, `s`, `query`) |
+| `download.ext`, and dropping downloads whose extension isn't in the configured list | `download.url` |
 
 ### Module: sections
 
@@ -73,17 +86,18 @@ LCP when the page was hidden before it painted) is sent as `null`.
 
 ### Capabilities and coverage
 
-The first batch of each page view carries `cap`: one key per browser feature that an included module
-relies on, with `1` (available) or `0` (missing). Modules that are not in the site's bundle add no keys.
+Each batch carries `cap`: one key per browser feature that an included module relies on, with `1`
+(available) or `0` (missing). Modules that are not in the site's bundle add no keys.
 
 | Key | Feature | Used for |
 | --- | --- | --- |
-| `vis` | Page Visibility API | Counting only visible time in `engagement.ms`; without it, time is wall-clock and flagged |
 | `io` | `IntersectionObserver` | `section_view` |
 | `lcp`, `cls`, `inp`, `fcp`, `ttfb` | `PerformanceObserver` entry types (`largest-contentful-paint`, `layout-shift`, `event` with `interactionId`, `paint`, `navigation`) | The matching `vitals` metric |
 
-The envelope also carries `tx`, the transport that delivered the batch (`b` beacon, `f` fetch keepalive,
-`x` XMLHttpRequest).
+The core adds no `cap` keys: the APIs it relies on (Page Visibility, `crypto.getRandomValues`, `Intl` time
+zones) exist in every browser that can parse the script, so a browser that runs the core has all of them.
+The one exception is `navigator.sendBeacon`, which has a fallback; the envelope carries `tx`, the
+transport that delivered the batch (`b` beacon, `x` XMLHttpRequest).
 
 So every measurement ends up in exactly one of these states, and the collector keeps them apart:
 
@@ -111,7 +125,7 @@ script data."* Queries can filter on any of these states.
   collector, so it survives the 7-day cap that Safari applies to cookies and storage written by JavaScript.
 - `identify` links the anonymous ID to the user ID in the collector. Earlier events stay attached to the
   anonymous ID; destinations that support it receive both.
-- Format: 128-bit random values, base64url, no embedded meaning.
+- Format: 128-bit random values as URL-safe text (the script uses base 36), no embedded meaning.
 
 ### Mapping to destinations
 
@@ -135,8 +149,13 @@ script data."* Queries can filter on any of these states.
 ## 6. Wire format
 
 `POST /tb/e` with `Content-Type: text/plain` (so `navigator.sendBeacon` doesn't trigger a CORS preflight),
-body as JSON. Events are batched and flushed when the page is hidden, on SPA navigation, or when the batch
-reaches 20 events. Falls back to `fetch(..., { keepalive: true })`.
+body as JSON, sent with `navigator.sendBeacon` or, where it doesn't exist, `XMLHttpRequest`.
+
+The `page_view` and clicks are sent right away. Everything else is queued and sent when the page is
+hidden, before an SPA navigation, when the queue reaches 20 events, or on `tinybeam.flush()`. A batch
+never mixes page views: it is sent before the page view ID changes.
+
+A batch sent when the page was hidden (with the sections and vitals modules):
 
 ```json
 {
@@ -145,17 +164,18 @@ reaches 20 events. Falls back to `fetch(..., { keepalive: true })`.
   "l": "en-US",
   "sw": 390, "sh": 844, "vw": 390, "vh": 664,
   "tz": "America/Montevideo",
-  "pv": "Ck3n2Vq8TtyQ1f0bH4mR7A",
-  "cap": { "vis": 1, "io": 1, "lcp": 1, "cls": 1, "inp": 0, "fcp": 1, "ttfb": 1 },
+  "pv": "1r3xk2o0v9q4w7m1b8n5c6l2",
+  "cap": { "io": 1, "lcp": 1, "cls": 1, "inp": 0, "fcp": 1, "ttfb": 1 },
   "tx": "b",
   "e": [
-    { "n": "page_view", "t": 1762531200000, "p": { "title": "Pricing", "ref": "https://chatgpt.com/", "utm_source": "newsletter" } },
     { "n": "section_view", "t": 1762531212000, "p": { "id": "plans", "kind": "section", "ms": 8400, "order": 1 } },
+    { "n": "vitals", "t": 1762531260000, "p": { "lcp": 820, "cls": 0, "fcp": 610, "ttfb": 95, "nav": "navigate" } },
     { "n": "engagement", "t": 1762531260000, "p": { "ms": 41200, "scroll": 75 } }
   ]
 }
 ```
 
+- `wd: 1` is added when `navigator.webdriver` is true (an automated browser; see bot traffic, section 7).
 - Short keys keep the payload small; the collector expands them.
 - `t` is the client time in ms; the collector also records its own receive time and uses it for ordering.
 - The collector answers `204 No Content`. Payloads over 16 KB are rejected.
@@ -280,15 +300,16 @@ Destinations are configured in the collector, never in the page:
 | Bundle | Budget (brotli) |
 | --- | --- |
 | Core | 1 KB |
+| Core + SPA navigation | 1.125 KB |
 | Core + sections | 1.5 KB |
 | Core + all modules | 3 KB |
 
-- Bundles are minified (whitespace, comments, renamed local variables, and mangled internal property names).
+- Bundles are minified: no whitespace or comments, local names shortened.
 - Old browsers are measured, not dropped. The source sticks to syntax that every browser since 2017 parses
   (ES2015: no optional chaining, nullish coalescing or class fields), which costs almost nothing in size,
   and the minifier never emits newer syntax. No polyfills are shipped: each browser API is feature-detected
   and the script degrades instead of failing, always recording what was missing (`cap`, section 3):
-  - sending: `navigator.sendBeacon`, then `fetch` with `keepalive`, then `XMLHttpRequest`;
+  - sending: `navigator.sendBeacon`, then `XMLHttpRequest` (reported in `tx`);
   - sections: skipped where `IntersectionObserver` is missing;
   - vitals: each metric is sent only where the browser exposes it (INP, for example, is Chromium-only).
 - Browsers that can't run the script at all (very old ones, or with JavaScript disabled) are still counted:
