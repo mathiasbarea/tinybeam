@@ -52,7 +52,7 @@ Tinybeam takes the opposite approach:
 | Page views | URL, title, referrer, language, viewport and screen, time zone, UTM and click IDs | Browser (core) |
 | Engagement | Visible time on page, scroll depth (25/50/75/100%) | Browser (core) |
 | Links | Outbound clicks, file downloads, site search | Browser (core) |
-| Custom events | `tinybeam.track(name, props)` and `data-tb-event` attributes | Browser (core) |
+| Custom events | `tinybeam.track(name, props)`, `data-tb-event` attributes, and `tinybeam.set(props)` for properties on every event | Browser (core) |
 | Sections | Which marked sections and components were seen, and for how long | Browser (module) |
 | Web Vitals | LCP, INP, CLS, TTFB from real visitors | Browser (module) |
 | Context | Device, browser, OS, country, region | Collector |
@@ -153,7 +153,7 @@ platform adapters `node.js` and `cloudflare.js`.
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
-| `tinybeam.js` | Core, including History API navigations | 1,133 B | 1,536 B |
+| `tinybeam.js` | Core, including History API navigations | 1,173 B | 1,536 B |
 
 ## Roadmap
 

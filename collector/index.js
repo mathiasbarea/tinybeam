@@ -16,6 +16,7 @@ const DEFAULTS = {
   sessionTimeout: 30 * 60 * 1000,
   maxBody: 16 * 1024,
   maxEvents: 50,
+  maxProps: 25, // per event; keys up to 40 characters, string values up to 500
 };
 
 const GIF = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), c => c.charCodeAt(0));
@@ -57,6 +58,23 @@ const specialFile = path =>
       : /^\/llms(-full)?\.txt$/.test(path) ? 'llms.txt'
         : path.endsWith('.md') ? 'markdown'
           : null;
+
+// Event properties as stored: a flat object of strings, finite numbers and booleans, with keys of letters,
+// digits and underscores. Anything else is dropped, and long strings are cut, so a page can't fill the
+// database with arbitrary data.
+export function cleanProps(props, max) {
+  const out = {};
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return out;
+  let count = 0;
+  for (const [key, value] of Object.entries(props)) {
+    if (count >= max || !/^[A-Za-z_]\w{0,39}$/.test(key)) continue;
+    if (typeof value === 'string') out[key] = value.slice(0, 500);
+    else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) out[key] = value;
+    else continue;
+    count++;
+  }
+  return out;
+}
 
 const httpUrl = value => {
   try {
@@ -177,22 +195,23 @@ export function createCollector(options = {}) {
     const records = [];
     for (const event of body.e) {
       if (!event || typeof event.n !== 'string' || !/^[\w.:-]{1,64}$/.test(event.n)) continue;
-      const props = event.p && typeof event.p === 'object' && !Array.isArray(event.p) ? event.p : {};
+      const raw = event.p && typeof event.p === 'object' ? event.p : {};
       const base = { ...shared, name: event.n, client_time: Number.isFinite(event.t) ? event.t : null };
       if (event.n === 'page_view') {
-        const title = typeof props.title === 'string' ? props.title.slice(0, 300) : null;
-        const referrer = typeof props.ref === 'string' ? props.ref.slice(0, 2000) : null;
-        records.push({ ...base, ...pageFields(pageUrl, referrer, title), props: {} });
+        // title and ref have their own columns; the rest are the site's properties (tinybeam.set).
+        const { title, ref, ...rest } = raw;
+        const props = cleanProps(rest, config.maxProps);
+        records.push({ ...base, ...pageFields(pageUrl, typeof ref === 'string' ? ref.slice(0, 2000) : null, typeof title === 'string' ? title.slice(0, 300) : null), props });
         const key = config.searchParams.find(k => pageUrl.searchParams.get(k));
-        if (key) records.push({ ...base, name: 'search', props: { term: pageUrl.searchParams.get(key).slice(0, 200) } });
+        if (key) records.push({ ...base, name: 'search', props: { ...props, term: pageUrl.searchParams.get(key).slice(0, 200) } });
       } else if (event.n === 'download') {
-        const target = httpUrl(props.url);
+        const target = httpUrl(raw.url);
         const ext = target && (target.pathname.match(/\.(\w+)$/) || [])[1];
         if (ext && config.downloads.includes(ext.toLowerCase())) {
-          records.push({ ...base, props: { url: target.href, ext: ext.toLowerCase() } });
+          records.push({ ...base, props: { ...cleanProps(raw, config.maxProps), url: target.href.slice(0, 2000), ext: ext.toLowerCase() } });
         }
       } else {
-        records.push({ ...base, props });
+        records.push({ ...base, props: cleanProps(raw, config.maxProps) });
       }
     }
     await store(records, context);

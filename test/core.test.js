@@ -152,6 +152,16 @@ test('tinybeam.track queues custom events and flushes them in batches of 20', as
   assert.equal(sent[2].e.length, 20);
 });
 
+test('tinybeam.set adds properties to every later event, and null removes them', async () => {
+  const { window, sent } = await load();
+  window.tinybeam.set({ plan: 'pro', variant: 'b' });
+  window.tinybeam.track('a', { variant: 'c' });
+  window.tinybeam.set({ variant: null });
+  window.tinybeam.track('b');
+  window.tinybeam.flush();
+  assert.deepEqual(sent[1].e.map(e => [e.n, e.p]), [['a', { plan: 'pro', variant: 'c' }], ['b', { plan: 'pro' }]]);
+});
+
 test('falls back to XMLHttpRequest without sendBeacon and says so', async () => {
   const { sent } = await load({ beacon: false });
   assert.equal(sent[0].tx, 'x');

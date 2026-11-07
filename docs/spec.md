@@ -38,7 +38,11 @@ be reported together with the base it comes from.
   - `data-pv`: left empty in the page; a collector in front of the site fills in the page view ID it
     assigned (section 7). Empty means the script generates one.
 - Neutral paths (`/tb/`) are recommended; names such as `analytics.js` are commonly blocked by filter lists.
-- Page API: `tinybeam.track(name, props)` queues a custom event; `tinybeam.flush()` sends the queue now.
+- Page API:
+  - `tinybeam.track(name, props)` queues a custom event,
+  - `tinybeam.set(props)` adds properties to every later event (login state, plan, A/B variant); an event's
+    own properties win, and `null` removes a property,
+  - `tinybeam.flush()` sends the queue now.
 
 ## 3. Events
 
@@ -52,10 +56,14 @@ Every event shares an envelope (section 6). Event-specific fields go in `p` (pro
 | `engagement` | When the page is hidden, and before an SPA navigation; not sent when no visible time passed | `ms` (visible time since the last `engagement`), `scroll` (max depth reached: 0, 25, 50, 75, 100) |
 | `outbound` | Click (or middle click) on a link to another host | `url` |
 | `download` | Click on a link with a `download` attribute or whose path ends in a file extension other than a web page (`.html`, `.htm`, `.php`, `.asp`, `.aspx`) | `url` |
-| custom | `tinybeam.track(name, props)` or click on an element with `data-tb-event` | free-form, flat, string/number/boolean values |
+| custom | `tinybeam.track(name, props)` or click on an element with `data-tb-event` | the site's own, see below |
 
 `data-tb-event="signup_click"` on an element sends that event on click; `data-tb-prop-<key>="value"`
 attributes become its properties. Clicks are sent right away, since they may leave the page.
+
+Properties, on any event: a flat object of strings, finite numbers and booleans; keys of letters, digits
+and underscores, up to 40 characters; up to 25 per event; strings cut at 500 characters. The collector drops
+anything else (nested objects, arrays, `null`), so a page can't fill the database with arbitrary data.
 
 Derived by the collector from the page URL `u` and the event URLs, so the script doesn't carry that code:
 

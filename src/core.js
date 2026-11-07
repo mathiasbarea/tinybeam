@@ -42,8 +42,10 @@
     }
     queue = [];
   };
+  // Properties set with tinybeam.set() go with every event; an event's own properties win.
+  const globals = {};
   const push = (name, props) => {
-    queue.push({ n: name, t: Date.now(), p: props });
+    queue.push({ n: name, t: Date.now(), p: Object.assign({}, globals, props) });
     if (queue.length > 19) flush();
   };
 
@@ -129,7 +131,17 @@
     listen(w, 'popstate', navigated);
   };
 
-  w.tinybeam = { track: (name, props) => push(name, props || {}), flush };
+  w.tinybeam = {
+    track: push,
+    // set({ plan: 'pro' }) adds properties to every later event; set({ plan: null }) removes one.
+    set: props => {
+      for (const key in props) {
+        if (props[key] == null) delete globals[key];
+        else globals[key] = props[key];
+      }
+    },
+    flush,
+  };
 
   // Starts as soon as the script runs: the beacon is a small, low-priority request that doesn't hold up
   // the page, and waiting for `load` would lose visitors who leave a slow page early. A prerendered page

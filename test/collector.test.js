@@ -87,6 +87,22 @@ test('keeps downloads in the configured list and passes custom events through', 
   ]);
 });
 
+test('stores only flat, valid properties, and keeps site properties on page views', async () => {
+  const { collector, records } = setup();
+  const many = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`k${i}`, i]));
+  await collector.handle(post(batch([
+    { n: 'page_view', t: 1, p: { title: 'Pricing', ref: '', plan: 'pro' } },
+    { n: 'video_play', t: 2, p: { video: 'intro', percent: 50, autoplay: false, nested: { a: 1 }, list: [1], nothing: null, nan: NaN, 'bad key': 1, long: 'x'.repeat(600) } },
+    { n: 'many', t: 3, p: many },
+  ])), {});
+  const [view, search, video, crowded] = records;
+  assert.deepEqual(view.props, { plan: 'pro' });
+  assert.deepEqual(search.props, { plan: 'pro', term: 'shoes' });
+  assert.deepEqual(Object.keys(video.props), ['video', 'percent', 'autoplay', 'long']);
+  assert.equal(video.props.long.length, 500);
+  assert.equal(Object.keys(crowded.props).length, 25);
+});
+
 test('rejects malformed, oversized and wrong-method requests', async () => {
   const { collector, records } = setup();
   assert.equal((await collector.handle(post('not json'))).status, 400);
