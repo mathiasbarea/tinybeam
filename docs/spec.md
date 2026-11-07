@@ -1,7 +1,7 @@
 # Tinybeam spec (draft)
 
-Status: **draft, open for review.** Nothing here is implemented yet; names and fields may change until the
-first release. Open questions are listed at the end.
+Status: **draft.** Nothing here is implemented yet; names and fields may change until the first release.
+Decisions taken during review are listed at the end.
 
 ## 1. Scope
 
@@ -19,6 +19,7 @@ This document defines:
 <script type="module" src="/tb/tinybeam.js" data-endpoint="/tb/e" async></script>
 ```
 
+- One file per site: the modules the site uses are selected at build time and bundled with the core.
 - Served from the site's own origin with long-lived, immutable caching (hashed file name in builds).
 - Does nothing until the page has loaded; work is scheduled with `requestIdleCallback` where available.
 - Configuration comes from `data-*` attributes on the script tag or from `tinybeam.init({...})`.
@@ -68,7 +69,7 @@ definitions used by the Chrome UX Report.
 | ID | Field | Lifetime | Who creates it |
 | --- | --- | --- | --- |
 | Anonymous ID | `aid` | Depends on consent mode (section 5) | Collector (cookie) or script |
-| Session ID | `sid` | Ends after 30 min without events or at midnight in the site's time zone | Collector |
+| Session ID | `sid` | Ends after 30 min without events | Collector |
 | User ID | `uid` | Set by the site with `tinybeam.identify(userId, traits)` | Site |
 | Page view ID | `pv` | One page view; ties `engagement`, `section_view` and `vitals` to their `page_view` | Script |
 
@@ -183,13 +184,17 @@ Destinations are configured in the collector, never in the page:
 
 CI fails if a bundle exceeds its budget.
 
-## 10. Open questions
+## 10. Decisions
 
-1. Session timeout: 30 min of inactivity (GA4's default) or end at midnight as well?
-2. Should `anonymous` mode also give the page a per-tab ID (in `sessionStorage`) so funnels inside one visit
-   work without consent? `sessionStorage` may still count as device storage under ePrivacy.
-3. Default storage for the reference collector: Workers Analytics Engine only, or Analytics Engine for
-   aggregates plus raw events in R2?
-4. Should the script ship as one file with build-time module selection, or as separate module files?
-5. Event naming: keep GA4-compatible names where they exist (`page_view`, `search`, `sign_up`) to reduce
-   mapping, or use Tinybeam's own?
+Settled during review (2026-11-07):
+
+1. **Sessions** end after 30 min without events, GA4's default, so numbers are comparable. No midnight cut.
+2. **No per-tab ID in `anonymous` mode.** `sessionStorage` may count as device storage under ePrivacy, so
+   nothing is stored without consent.
+3. **Storage** in the reference collector: Workers Analytics Engine for aggregates, with optional raw
+   events in R2.
+4. **One file per site.** Modules are selected at build time and bundled into a single script, so the page
+   makes one request.
+5. **Event names** follow GA4 where an equivalent exists (`page_view`, `search`, `sign_up`, `login`,
+   `generate_lead`); Tinybeam names are used only for what GA4 doesn't have (`engagement`, `section_view`,
+   `vitals`, `outbound`, `download`).
