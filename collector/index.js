@@ -5,6 +5,8 @@
 // handle(request, context), where context carries what the platform knows about the client:
 //   { ip, country, region, city, verifiedBotCategory, waitUntil(promise) }
 import { classifyBot } from './bots.js';
+import { renderBanner } from './banner.js';
+import { COOKIE_AGE, consentSettings, consentState, cookieHeader, formatDecision, parseCookies, parseDecision, scriptState, validId } from './consent.js';
 import { campaign, classifyReferrer, geoFromHeaders, parseUserAgent } from './enrich.js';
 import { memoryStorage } from './storage.js';
 
@@ -18,6 +20,7 @@ const DEFAULTS = {
   maxEvents: 50,
   maxProps: 25, // per event; keys up to 40 characters, string values up to 500
   script: null, // the browser script's code; when set, served at `${path}/tinybeam.js`
+  secureCookies: true, // the visitor cookies (consent, stable ID) carry Secure; off only for plain-HTTP testing
 };
 
 const GIF = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), c => c.charCodeAt(0));
@@ -33,7 +36,8 @@ export function dailySalt() {
 }
 
 // Sessions kept in memory: a session ends after `timeout` without events, or on end() (tinybeam.reset).
-// Several instances need a shared store with the same `touch(key, now)` and `end(key)` methods.
+// move() carries a session to a new key, when a visitor who accepts consent goes from the daily hash to a
+// stable ID mid-session. Several instances need a shared store with the same methods.
 export function memorySessions(timeout) {
   const sessions = new Map();
   return {
@@ -47,6 +51,12 @@ export function memorySessions(timeout) {
     },
     end(key) {
       sessions.delete(key);
+    },
+    move(from, to) {
+      const session = sessions.get(from);
+      if (!session) return;
+      sessions.set(to, session);
+      sessions.delete(from);
     },
   };
 }
@@ -82,6 +92,9 @@ export function cleanProps(props, max, { allowNull = false } = {}) {
 }
 
 const SETTERS = ['$page', '$session', '$user', '$reset'];
+// `is` in a batch: where the script found the stable ID (docs/spec.md, section 5). Without it, the
+// collector keeps the ID in its own cookies.
+const ID_STORES = { e: 'endpoint', s: 'script' };
 
 const httpUrl = value => {
   try {
@@ -103,18 +116,56 @@ export function createCollector(options = {}) {
   const salt = config.salt || dailySalt();
   const sessions = config.sessions || memorySessions(config.sessionTimeout);
   const now = config.now || Date.now;
+  const visitorCookie = (name, value, maxAge, httpOnly = true) => cookieHeader(name, value, maxAge, { secure: config.secureCookies, httpOnly });
 
-  // The site ID when the request may be recorded for it, or null: the site must exist, and both the page
-  // URL and the Origin header (when present) must be one of its origins.
+  // The site when the request may be recorded for it, or null: the site must exist, and both the page URL
+  // and the Origin header (when present) must be one of its origins.
   const resolveSite = async (siteId, pageUrl, origin) => {
     const site = siteId ? await findSite(siteId) : null;
     if (!site) return null;
     const allowed = site.origins || [];
     if (!allowed.includes(pageUrl.origin) || (origin && !allowed.includes(origin))) return null;
-    return site.id;
+    return site;
   };
 
-  // Fields shared by every record from one client request.
+  // Who the visitor is, as far as their consent allows (docs/spec.md, section 5). `via` is how the script
+  // keeps the stable ID: { store: 'endpoint' | 'script', id, decision } from the batch, or null when the
+  // collector keeps it in its own cookies. Returns the identity fields, the cookies to set (when `respond`)
+  // and the consent state.
+  const identify = async ({ request, context, site, geo, ua, time, bot, via, decision: given, respond }) => {
+    const day = new Date(time).toISOString().slice(0, 10);
+    const hash = await sha256(`${await salt(day)}|${site.id}|${context.ip || ''}|${ua}`);
+    if (bot) return { fields: { aid: hash, sid: null, consent: null, ads_consent: null, id_store: null }, cookies: [], hash };
+    const settings = consentSettings(site);
+    const cookies = parseCookies(request.headers.get('cookie'));
+    const decision = given || parseDecision(via ? via.decision : cookies.tb_c);
+    const state = consentState({ settings, country: geo.country, decision, gpc: request.headers.get('sec-gpc') === '1' });
+    const set = [];
+    let aid = state.anonymousOnly ? null : hash;
+    let idStore = null;
+    if (state.stable && via) {
+      if (validId(via.id)) { aid = via.id; idStore = via.store; }
+    } else if (state.stable) {
+      // The collector keeps the ID: renewed on each response, and created from the day's hash, so the
+      // visitor's records today and the cookie's later ones are the same visitor, and a browser that
+      // drops the cookie still counts once a day instead of once per request.
+      aid = validId(cookies.tb_id) ? cookies.tb_id : hash;
+      idStore = 'collector';
+      if (respond) set.push(visitorCookie('tb_id', aid, COOKIE_AGE.id));
+      if (respond && !decision && cookies.tb_c !== '--') set.push(visitorCookie('tb_c', '--', COOKIE_AGE.notRequired, false));
+    } else if (!via && cookies.tb_id && respond) {
+      set.push(visitorCookie('tb_id', '', 0)); // consent withdrawn or no longer allowed
+    }
+    return {
+      fields: { aid, sid: aid ? sessions.touch(`${site.id}|${aid}`, time) : null, consent: state.consent, ads_consent: state.ads_consent, id_store: idStore },
+      cookies: set,
+      state,
+      settings,
+      hash,
+    };
+  };
+
+  // Fields shared by every record from one client request, and what identify() decided.
   const clientFields = async (request, context, site, extra = {}) => {
     const ua = request.headers.get('user-agent') || '';
     const time = now();
@@ -122,21 +173,24 @@ export function createCollector(options = {}) {
       ? { country: context.country || null, region: context.region || null, city: context.city || null }
       : geoFromHeaders(request.headers);
     const bot = classifyBot(ua, { webdriver: extra.webdriver, verifiedCategory: context.verifiedBotCategory });
-    const day = new Date(time).toISOString().slice(0, 10);
-    const aid = await sha256(`${await salt(day)}|${site}|${context.ip || ''}|${ua}`);
+    const who = await identify({ request, context, site, geo, ua, time, bot, via: extra.via || null, decision: extra.decision, respond: extra.respond });
     return {
-      received_at: time,
-      site,
-      aid,
-      sid: bot ? null : sessions.touch(`${site}|${aid}`, time),
-      ...parseUserAgent(ua, request.headers),
-      ...geo,
-      traffic: bot ? 'bot' : 'human',
-      bot_name: bot ? bot.name : null,
-      bot_category: bot ? bot.category : null,
-      bot_verified: bot ? bot.verified : null,
+      fields: {
+        received_at: time,
+        site: site.id,
+        ...who.fields,
+        ...parseUserAgent(ua, request.headers),
+        ...geo,
+        traffic: bot ? 'bot' : 'human',
+        bot_name: bot ? bot.name : null,
+        bot_category: bot ? bot.category : null,
+        bot_verified: bot ? bot.verified : null,
+      },
+      who,
     };
   };
+  // A refusal where the site chose not to measure refusals: nothing is recorded.
+  const dropped = who => who.state && who.state.anonymousOnly && who.settings.onRefusal === 'drop';
 
   const pageFields = (pageUrl, referrer, title) => {
     const fromCampaign = campaign(pageUrl);
@@ -163,24 +217,35 @@ export function createCollector(options = {}) {
   };
 
   const corsHeaders = origin => (origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {});
+  const withCookies = (headers, cookies) => {
+    const out = new Headers(headers);
+    for (const value of cookies) out.append('Set-Cookie', value);
+    return out;
+  };
+  const readJson = async request => {
+    const text = await request.text();
+    if (text.length > config.maxBody) return { error: new Response('Payload Too Large', { status: 413 }) };
+    try { return { body: JSON.parse(text) }; } catch { return { error: new Response('Bad Request', { status: 400 }) }; }
+  };
+  const preflight = (origin, methods) => new Response(null, { status: 204, headers: { ...corsHeaders(origin), 'Access-Control-Allow-Methods': methods, 'Access-Control-Allow-Headers': 'Content-Type' } });
 
   async function collect(request, context) {
     const origin = request.headers.get('origin');
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: { ...corsHeaders(origin), 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' } });
-    }
+    if (request.method === 'OPTIONS') return preflight(origin, 'POST');
     if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
-    const text = await request.text();
-    if (text.length > config.maxBody) return new Response('Payload Too Large', { status: 413 });
-    let body;
-    try { body = JSON.parse(text); } catch { return new Response('Bad Request', { status: 400 }); }
+    const { body, error } = await readJson(request);
+    if (error) return error;
     const pageUrl = body && body.v === 1 && Array.isArray(body.e) && body.e.length <= config.maxEvents && httpUrl(body.u);
     if (!pageUrl) return new Response('Bad Request', { status: 400 });
     const site = await resolveSite(typeof body.s === 'string' ? body.s : null, pageUrl, origin);
     if (!site) return new Response('Forbidden', { status: 403 });
 
+    const via = ID_STORES[body.is] ? { store: ID_STORES[body.is], id: body.i, decision: typeof body.c === 'string' ? body.c : null } : null;
+    const { fields, who } = await clientFields(request, context, site, { webdriver: body.wd === 1, via, respond: true });
+    const headers = withCookies(corsHeaders(origin), who.cookies);
+    if (dropped(who)) return new Response(null, { status: 204, headers });
     const shared = {
-      ...await clientFields(request, context, site, { webdriver: body.wd === 1 }),
+      ...fields,
       kind: 'event',
       source: 'script',
       js: 'on',
@@ -215,8 +280,8 @@ export function createCollector(options = {}) {
         records.push({ ...shared, kind: 'set', name: event.n, client_time: Number.isFinite(event.t) ? event.t : null, uid, props: event.n === '$reset' ? {} : props });
         // A reset starts a new session for what follows, in this batch and later ones.
         if (event.n === '$reset' && shared.sid) {
-          sessions.end(`${site}|${shared.aid}`);
-          shared.sid = sessions.touch(`${site}|${shared.aid}`, shared.received_at);
+          sessions.end(`${site.id}|${shared.aid}`);
+          shared.sid = sessions.touch(`${site.id}|${shared.aid}`, shared.received_at);
         }
         continue;
       }
@@ -224,7 +289,7 @@ export function createCollector(options = {}) {
       const raw = event.p && typeof event.p === 'object' ? event.p : {};
       const base = { ...shared, name: event.n, client_time: Number.isFinite(event.t) ? event.t : null };
       if (event.n === 'page_view') {
-        // title and ref have their own columns; the rest are the site's properties (tinybeam.set).
+        // title and ref have their own columns; the rest are the site's properties.
         const { title, ref, ...rest } = raw;
         const props = cleanProps(rest, config.maxProps);
         records.push({ ...base, ...pageFields(pageUrl, typeof ref === 'string' ? ref.slice(0, 2000) : null, typeof title === 'string' ? title.slice(0, 300) : null), props });
@@ -241,7 +306,57 @@ export function createCollector(options = {}) {
       }
     }
     await store(records, context);
-    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    return new Response(null, { status: 204, headers });
+  }
+
+  // `${path}/c`: consent. GET ?s=&u=[&m=e|s] answers what the script needs to know (`{ "c": state }`,
+  // section 5); POST { s, u, c, src, i?, is? } records a decision as a `$consent` record and, when the
+  // collector keeps the ID, sets the decision and ID cookies.
+  async function consent(request, context) {
+    const origin = request.headers.get('origin');
+    if (request.method === 'OPTIONS') return preflight(origin, 'GET, POST');
+    let input;
+    if (request.method === 'GET') {
+      const params = new URL(request.url).searchParams;
+      input = { s: params.get('s'), u: params.get('u'), is: params.get('m') };
+    } else if (request.method === 'POST') {
+      const { body, error } = await readJson(request);
+      if (error) return error;
+      input = body || {};
+    } else return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, POST' } });
+    const pageUrl = httpUrl(input.u);
+    const site = pageUrl && await resolveSite(typeof input.s === 'string' ? input.s : null, pageUrl, origin);
+    if (!site) return new Response('Forbidden', { status: 403 });
+    const mode = ID_STORES[input.is];
+    const json = (data, cookies = []) => new Response(JSON.stringify(data), { headers: withCookies({ ...corsHeaders(origin), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, cookies) });
+
+    if (request.method === 'GET') {
+      const { who } = await clientFields(request, context, site, { via: mode ? { store: mode } : null, respond: true });
+      return json({ c: who.state ? scriptState(who.settings, who.state) : 'none' }, who.cookies);
+    }
+
+    const decision = parseDecision(input.c);
+    if (!decision) return new Response('Bad Request', { status: 400 });
+    const cookies = parseCookies(request.headers.get('cookie'));
+    const via = mode ? { store: mode, id: input.i } : null;
+    const { fields, who } = await clientFields(request, context, site, { via, decision, respond: true });
+    if (!who.state) return json({}); // bots don't decide
+    const set = [...who.cookies];
+    if (!via) set.push(visitorCookie('tb_c', formatDecision(decision), COOKIE_AGE.decision, false));
+    // Accepting mid-session keeps the session: it moves from the daily hash to the stable ID.
+    if (who.state.stable && fields.aid !== who.hash && !(validId(cookies.tb_id) && cookies.tb_id === fields.aid)) {
+      sessions.move(`${site.id}|${who.hash}`, `${site.id}|${fields.aid}`);
+      fields.sid = sessions.touch(`${site.id}|${fields.aid}`, fields.received_at);
+    }
+    const source = ['banner', 'api'].includes(input.src) ? input.src : 'api';
+    // The proof of the decision. A refusal carries no identifier.
+    await store([{
+      ...fields,
+      ...(who.state.stable ? {} : { aid: null, sid: null }),
+      kind: 'set', name: '$consent', source: 'script', js: 'on', url: pageUrl.href, host: pageUrl.host, path: pageUrl.pathname,
+      props: { analytics: decision.analytics, ads: decision.ads, source },
+    }], context);
+    return json({ c: scriptState(who.settings, who.state) }, set);
   }
 
   // GET `${path}/n?s=<site ID>` from the page's <noscript><img>: a page view with JavaScript off.
@@ -249,18 +364,42 @@ export function createCollector(options = {}) {
   async function noscript(request, context) {
     const pageUrl = httpUrl(request.headers.get('referer'));
     const site = pageUrl && await resolveSite(new URL(request.url).searchParams.get('s'), pageUrl, null);
+    let cookies = [];
     if (site) {
-      const fields = await clientFields(request, context, site);
-      await store([{ ...fields, ...pageFields(pageUrl, null, null), kind: 'event', source: 'noscript', js: 'off', name: 'page_view', props: {} }], context);
+      const { fields, who } = await clientFields(request, context, site, { respond: true });
+      cookies = who.cookies;
+      if (!dropped(who)) await store([{ ...fields, ...pageFields(pageUrl, null, null), kind: 'event', source: 'noscript', js: 'off', name: 'page_view', props: {} }], context);
     }
-    return new Response(GIF, { headers: { 'Content-Type': 'image/gif', 'Cache-Control': 'no-store' } });
+    return new Response(GIF, { headers: withCookies({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store' }, cookies) });
+  }
+
+  // GET `${path}/banner.js?s=<site ID>&l=<languages>[&f=1][&m=e|s]`: Tinybeam's consent banner with the
+  // site's texts, when this visitor must be asked (or `f`, a "privacy settings" click); otherwise an empty
+  // script, plus the cookies that say no decision is needed. The answer depends on the visitor, so it is
+  // never cached.
+  async function banner(request, context) {
+    const params = new URL(request.url).searchParams;
+    const site = await findSite(params.get('s'));
+    if (!site) return new Response('Not Found', { status: 404 });
+    const settings = consentSettings(site);
+    let cookies = [];
+    let show = settings.banner;
+    if (show && params.get('f') !== '1') {
+      const mode = ID_STORES[params.get('m')];
+      const { who } = await clientFields(request, context, site, { via: mode ? { store: mode } : null, respond: true });
+      cookies = who.cookies;
+      show = Boolean(who.state) && scriptState(settings, who.state) === 'pending';
+    }
+    return new Response(show ? renderBanner(settings, params.get('l')) : '', { headers: withCookies({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'private, no-store' }, cookies) });
   }
 
   // Routes collector requests; anything else is a 404 (or, inside a site's own server, not ours to answer).
   async function handle(request, context = {}) {
     const { pathname } = new URL(request.url);
     if (pathname === `${config.path}/e`) return collect(request, context);
+    if (pathname === `${config.path}/c`) return consent(request, context);
     if (pathname === `${config.path}/n`) return noscript(request, context);
+    if (pathname === `${config.path}/banner.js`) return banner(request, context);
     if (pathname === `${config.path}/tinybeam.js` && config.script) {
       return new Response(config.script, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*' } });
     }
@@ -276,7 +415,7 @@ export function createCollector(options = {}) {
     if (!pageUrl || request.method !== 'GET') return null;
     const site = await resolveSite(context.site, pageUrl, null);
     if (!site) return null;
-    const fields = await clientFields(request, context, site);
+    const { fields, who } = await clientFields(request, context, site);
     const isHtml = (response.headers.get('content-type') || '').startsWith('text/html');
     if (fields.traffic === 'bot') {
       await store([{ ...fields, ...pageFields(pageUrl, request.headers.get('referer'), null), kind: 'bot', source: 'server', name: 'request', status: response.status, special_file: specialFile(pageUrl.pathname), props: {} }], context);
@@ -284,11 +423,21 @@ export function createCollector(options = {}) {
     }
     if (!isHtml || response.status >= 300) return null;
     const pv = context.pv || crypto.randomUUID().replace(/-/g, '');
-    await store([{ ...fields, ...pageFields(pageUrl, request.headers.get('referer'), null), kind: 'event', source: 'server', js: 'unknown', name: 'page_view', pv, status: response.status, props: {} }], context);
+    if (!dropped(who)) await store([{ ...fields, ...pageFields(pageUrl, request.headers.get('referer'), null), kind: 'event', source: 'server', js: 'unknown', name: 'page_view', pv, status: response.status, props: {} }], context);
     return pv;
   }
 
-  return { handle, observe, config };
+  // For a collector in front of the site: the visitor's consent state for the script's data-consent
+  // attribute (`pending` means show the banner), so the script doesn't have to ask.
+  async function consentFor(request, context = {}) {
+    const pageUrl = httpUrl(request.url);
+    const site = pageUrl && await resolveSite(context.site, pageUrl, null);
+    if (!site) return null;
+    const { who } = await clientFields(request, context, site);
+    return who.state ? scriptState(who.settings, who.state) : null;
+  }
+
+  return { handle, observe, consentFor, config };
 }
 
 // A new random site ID: 12 lowercase letters and digits.
@@ -296,3 +445,5 @@ export const newSiteId = () => [...crypto.getRandomValues(new Uint8Array(12))].m
 
 export { memoryStorage, sqlStorage, COLUMNS } from './storage.js';
 export { classifyBot, BOTS } from './bots.js';
+export { CONSENT_DEFAULTS, CONSENT_REGIONS } from './consent.js';
+export { createIdEndpoint } from './endpoint.js';

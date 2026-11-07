@@ -6,7 +6,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants } from 'node:zlib';
 
-export const BUNDLES = [{ name: 'tinybeam.js', flags: {}, budget: 1536 }];
+// tinybeam.js: the core, with consent, for sites where the collector keeps the stable ID (a /tb/ path on
+// the site). tinybeam-ids.js: the same plus keeping the ID through the site's endpoint or in cookies the
+// script writes (docs/spec.md, section 5), for sites whose collector is elsewhere.
+export const BUNDLES = [
+  { name: 'tinybeam.js', flags: { IDS: false }, budget: 1536 },
+  { name: 'tinybeam-ids.js', flags: { IDS: true }, budget: 1792 },
+];
 
 export async function bundle(flags) {
   const result = await build({

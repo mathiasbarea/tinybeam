@@ -19,10 +19,17 @@ export default {
     const response = await env.ASSETS.fetch(request); // or fetch(request) for a site behind an origin
     const pv = await app.collector.observe(request, response, context);
     if (!pv) return response;
-    // Give the script the same page view ID, so its events merge with the server's record. The page's
-    // script tag carries an empty data-pv attribute for this.
+    // Give the script the same page view ID, so its events merge with the server's record (the page's
+    // script tag carries an empty data-pv attribute for this), and, when the site uses Tinybeam's banner
+    // (data-consent="auto"), the visitor's consent state, so the script knows at once whether to ask.
+    const consent = await app.collector.consentFor(request, context);
     return new HTMLRewriter()
-      .on('script[data-pv]', { element: el => el.setAttribute('data-pv', pv) })
+      .on('script[data-pv]', {
+        element(el) {
+          el.setAttribute('data-pv', pv);
+          if (consent && el.getAttribute('data-consent') === 'auto') el.setAttribute('data-consent', consent);
+        },
+      })
       .transform(response);
   },
 };

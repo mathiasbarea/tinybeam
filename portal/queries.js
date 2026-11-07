@@ -7,10 +7,13 @@ const count = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
 const top = (map, n = 10) => [...map].sort((a, b) => b[1] - a[1]).slice(0, n).map(([key, value]) => ({ key, value }));
 const parse = text => { try { return text ? JSON.parse(text) : {}; } catch { return {}; } };
 
-export function createQueries(driver, { table = 'tinybeam_events', limit = 100_000 } = {}) {
+export function createQueries(driver, { table = 'tinybeam_events', limit = 100_000, ready = null } = {}) {
   if (!/^\w+$/.test(table)) throw new Error(`Invalid table name: ${table}`);
   const rows = async (sql, params) => {
-    try { return await driver.all(sql.replaceAll('$t', table), params); } catch (error) {
+    try {
+      if (ready) await ready(); // the table may predate newer columns
+      return await driver.all(sql.replaceAll('$t', table), params);
+    } catch (error) {
       if (/no such table/i.test(String(error && error.message))) return []; // nothing recorded yet
       throw error;
     }

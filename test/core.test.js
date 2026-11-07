@@ -17,8 +17,11 @@ async function load({
   attrs = { 'data-site': 'site1', 'data-pv': 'server-pv' },
   beacon = true,
   setup = () => {},
+  cookie = '',
+  respond = () => null, // (method, url, body) => JSON answer for a request, or null
 } = {}) {
   const sent = [];
+  const requests = []; // every XMLHttpRequest: { method, url, body }
   const clock = { now: 1_000_000 };
   let visibility = 'visible';
   const dom = new JSDOM(`<!doctype html><title>Pricing</title><body>${body}</body>`, {
@@ -36,14 +39,24 @@ async function load({
         };
       }
       window.XMLHttpRequest = class {
-        open(method, endpoint) { this.endpoint = endpoint; }
+        open(method, endpoint) { this.method = method; this.endpoint = endpoint; }
         setRequestHeader() {}
-        send(data) { sent.push({ endpoint: this.endpoint, ...JSON.parse(data) }); }
+        send(data) {
+          const body = data ? JSON.parse(data) : null;
+          requests.push({ method: this.method, url: this.endpoint, body });
+          if (body && body.e) sent.push({ endpoint: this.endpoint, ...body });
+          const answer = respond(this.method, this.endpoint, body);
+          if (answer) {
+            this.responseText = JSON.stringify(answer);
+            this.onload();
+          }
+        }
       };
       setup(window);
     },
   });
   const { window } = dom;
+  for (const pair of cookie.split(';').filter(Boolean)) window.document.cookie = pair.trim();
   if (window.document.readyState !== 'complete') await new Promise(r => window.addEventListener('load', r));
   const script = window.document.createElement('script');
   for (const [k, v] of Object.entries(attrs)) script.setAttribute(k, v);
@@ -53,7 +66,7 @@ async function load({
     visibility = state;
     window.document.dispatchEvent(new window.Event('visibilitychange'));
   };
-  return { window, sent, clock, setVisibility };
+  return { window, sent, requests, clock, setVisibility };
 }
 
 const events = sent => sent.flatMap(batch => batch.e.map(e => ({ ...e, pv: batch.pv })));
@@ -238,6 +251,72 @@ test('History API navigations are page views', async () => {
   assert.notEqual(all[2].pv, all[0].pv);
   assert.deepEqual(all[2].p, { title: 'Pricing', ref: 'https://example.com/pricing/?utm_source=news' });
   assert.equal(sent.at(-1).u, 'https://example.com/docs/');
+});
+
+const bannerSrc = window => [...window.document.querySelectorAll('script[src]')].map(s => s.getAttribute('src')).find(src => src.includes('/banner.js'));
+
+test('consent() sends the decision to the collector right away', async () => {
+  const { window, requests } = await load({ attrs: { 'data-site': 'site1' } });
+  window.tinybeam.track('before', {});
+  window.tinybeam.consent({ analytics: true, ads: false, source: 'banner' });
+  const decision = requests.at(-1);
+  assert.deepEqual([decision.method, decision.url], ['POST', '/tb/c']);
+  assert.deepEqual(decision.body, { s: 'site1', u: 'https://example.com/pricing/?utm_source=news', src: 'banner', c: '10' });
+  window.tinybeam.consent(false);
+  assert.deepEqual([requests.at(-1).body.c, requests.at(-1).body.src], ['00', 'api']);
+});
+
+test('the banner: loaded when the collector in front says to ask, or to let the collector decide while undecided', async () => {
+  const pending = await load({ attrs: { 'data-site': 'site1', 'data-consent': 'pending' } });
+  assert.equal(bannerSrc(pending.window), '/tb/banner.js?s=site1&l=,en-US');
+  const auto = await load({ attrs: { 'data-site': 'site1', 'data-consent': 'auto' }, setup(w) { Object.defineProperty(w.HTMLHtmlElement.prototype, 'lang', { get: () => 'es' }); } });
+  assert.equal(bannerSrc(auto.window), '/tb/banner.js?s=site1&l=es,en-US');
+  const decided = await load({ attrs: { 'data-site': 'site1', 'data-consent': 'auto' }, cookie: 'tb_c=10' });
+  assert.equal(bannerSrc(decided.window), undefined);
+  const granted = await load({ attrs: { 'data-site': 'site1', 'data-consent': 'granted' } });
+  assert.equal(bannerSrc(granted.window), undefined);
+  const none = await load({ attrs: { 'data-site': 'site1' } });
+  assert.equal(bannerSrc(none.window), undefined, 'a site with its own banner loads nothing');
+});
+
+test('a privacy settings element opens the banner again', async () => {
+  const { window } = await load({ attrs: { 'data-site': 'site1' }, body: '<a href="#" data-tb-consent>Privacy settings</a>' });
+  click(window, '[data-tb-consent]');
+  assert.match(bannerSrc(window), /&f=1$/);
+});
+
+test('ID kept by the script: created where no consent is needed, sent with every batch', async () => {
+  const { window, sent, requests } = await load({
+    name: 'tinybeam-ids.js',
+    attrs: { 'data-site': 'site1', 'data-id': 'script' },
+    respond: (method, url) => (url.startsWith('/tb/c?') ? { c: 'not_required' } : null),
+  });
+  assert.match(requests.find(r => r.method === 'GET').url, /^\/tb\/c\?s=site1&u=https%3A%2F%2Fexample.com%2F.+&m=s$/);
+  const id = window.document.cookie.match(/tb_id=([a-z0-9]+)/)[1];
+  window.tinybeam.track('next', {});
+  window.tinybeam.flush();
+  assert.deepEqual([sent.at(-1).i, sent.at(-1).is], [id, 's']);
+  window.tinybeam.consent(false);
+  assert.doesNotMatch(window.document.cookie, /tb_id=/, 'a refusal deletes it');
+  assert.match(window.document.cookie, /tb_c=00/);
+  assert.deepEqual([requests.at(-1).url, requests.at(-1).body.c, requests.at(-1).body.is], ['/tb/c', '00', 's']);
+});
+
+test('ID kept by the site\'s endpoint: the decision goes there first, then to the collector with the ID', async () => {
+  const { window, requests } = await load({
+    name: 'tinybeam-ids.js',
+    attrs: { 'data-site': 'site1', 'data-id': 'endpoint', 'data-consent': 'auto' },
+    respond: (method, url) => (url.startsWith('/tb/c?') ? { c: 'pending' } : url === '/tb/id' ? (window.document.cookie = 'tb_id=abcdefghij0123456789', { i: 'abcdefghij0123456789' }) : null),
+  });
+  assert.match(bannerSrc(window), /&m=e$/, 'asked, since consent is required');
+  window.tinybeam.consent(true);
+  const [toEndpoint, toCollector] = requests.slice(-2);
+  assert.deepEqual([toEndpoint.method, toEndpoint.url, toEndpoint.body], ['POST', '/tb/id', { analytics: true, ads: true }]);
+  assert.deepEqual([toCollector.url, toCollector.body.c, toCollector.body.i, toCollector.body.is], ['/tb/c', '11', 'abcdefghij0123456789', 'e']);
+});
+
+test('the core bundle has no code for keeping the ID in the page', () => {
+  assert.doesNotMatch(code['tinybeam.js'], /tb\/id|max-age/);
 });
 
 test('bundles parse as ES2015 and fit their size budgets', () => {

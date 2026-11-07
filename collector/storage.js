@@ -52,7 +52,21 @@ export const COLUMNS = {
   bot_verified: 'INTEGER',
   status: 'INTEGER', // HTTP status, for server-side records
   special_file: 'TEXT', // robots.txt | sitemap | llms.txt | markdown, for server-side records
+  consent: 'TEXT', // granted | not_required | pending | denied | gpc (docs/spec.md, section 5)
+  ads_consent: 'TEXT', // the same states, for advertising destinations
+  id_store: 'TEXT', // where the stable ID was kept: collector | endpoint | script; empty without one
 };
+
+// Columns added after the first release: tables created earlier get them on startup.
+export const ADDED_COLUMNS = ['uid', 'consent', 'ads_consent', 'id_store'];
+
+// Adds columns to a table that predates them. Portable across SQL databases: each ALTER either works or
+// fails because the column is already there.
+export async function addColumns(driver, table, columns) {
+  for (const [name, type] of columns) {
+    try { await driver.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`); } catch { /* already there */ }
+  }
+}
 
 // Keeps records in an array. For tests and trying things out.
 export function memoryStorage() {
@@ -77,12 +91,16 @@ export function sqlStorage(driver, { table = 'tinybeam_events' } = {}) {
   const columns = Object.keys(COLUMNS);
   const insert = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
   let ready;
-  const init = () => (ready ??= Promise.resolve(driver.exec(
-    `CREATE TABLE IF NOT EXISTS ${table} (${columns.map(c => `${c} ${COLUMNS[c]}`).join(', ')});\n` +
-    `CREATE INDEX IF NOT EXISTS ${table}_site_time ON ${table} (site, received_at);`,
-  )));
+  const init = () => (ready ??= (async () => {
+    await driver.exec(
+      `CREATE TABLE IF NOT EXISTS ${table} (${columns.map(c => `${c} ${COLUMNS[c]}`).join(', ')});\n` +
+      `CREATE INDEX IF NOT EXISTS ${table}_site_time ON ${table} (site, received_at);`,
+    );
+    await addColumns(driver, table, ADDED_COLUMNS.map(c => [c, COLUMNS[c]]));
+  })());
   return {
     driver,
+    ready: init, // creates or updates the table; queries call it before reading
     async write(batch) {
       await init();
       if (driver.batch) await driver.batch(insert, batch.map(toRow));

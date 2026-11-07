@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createCollector, memoryStorage, newSiteId, sqlStorage } from '../collector/index.js';
+import { ADDED_COLUMNS } from '../collector/storage.js';
 import { classifyBot } from '../collector/bots.js';
 import { classifyReferrer, campaign, parseUserAgent } from '../collector/enrich.js';
 import { cloudflareContext, d1Driver } from '../collector/cloudflare.js';
@@ -49,7 +50,8 @@ test('stores an enriched page view, plus the search derived from its URL', async
   assert.equal(view.country, 'UY');
   assert.equal(view.traffic, 'human');
   assert.equal(view.screen_w, 390);
-  assert.match(view.aid, /^[0-9a-f]{32}$/);
+  assert.match(view.aid, /^[0-9a-f]{32}$/, 'a stable ID created from the day\'s hash');
+  assert.deepEqual([view.consent, view.ads_consent, view.id_store], ['not_required', 'not_required', 'collector'], 'Uruguay needs no consent by default');
   assert.ok(view.sid);
   assert.equal(JSON.stringify(view).includes('203.0.113.9'), false, 'the IP is never stored');
   assert.deepEqual([search.name, search.props], ['search', { term: 'shoes' }]);
@@ -269,7 +271,7 @@ test('the D1 driver batches inserts', async () => {
   };
   const collector = createCollector({ storage: sqlStorage(d1Driver(db)), sites: SITES });
   await collector.handle(post(batch([{ n: 'a', t: 1, p: {} }, { n: 'b', t: 2, p: {} }])), {});
-  assert.deepEqual(calls, [['exec', true], ['batch', 2]]);
+  assert.deepEqual(calls, [['exec', true], ...ADDED_COLUMNS.map(() => ['exec', false]), ['batch', 2]], 'creates the table, adds newer columns to older tables, then batches');
 });
 
 test('the Cloudflare context comes from request.cf', () => {
@@ -291,6 +293,8 @@ test('the Node.js adapter serves the collector over HTTP', async () => {
     assert.equal(res.status, 204);
     assert.equal(storage.records[0].os, 'iOS');
     assert.ok(storage.records[0].aid);
+    const fromUs = await fetch(`http://127.0.0.1:${port}/tb/e`, { method: 'POST', body: JSON.stringify(batch([{ n: 'page_view', t: 1, p: {} }])), headers: { 'cf-ipcountry': 'US' } });
+    assert.deepEqual(fromUs.headers.getSetCookie().map(c => c.split('=')[0]), ['tb_id', 'tb_c'], 'each cookie in its own header');
   } finally {
     server.close();
   }

@@ -7,14 +7,16 @@ import { createStore } from './portal/store.js';
 
 export function createTinybeam({ driver, script = null, collectorPath = '/tb', portalPath = '/portal', secureCookies = true, ...collectorOptions }) {
   const store = createStore(driver);
+  const storage = sqlStorage(driver);
   const collector = createCollector({
-    storage: sqlStorage(driver),
+    storage,
     sites: store.activeSite,
     path: collectorPath,
     script,
+    secureCookies,
     ...collectorOptions,
   });
-  const portal = createPortal({ store, queries: createQueries(driver), basePath: portalPath, collectorPath, secureCookies });
+  const portal = createPortal({ store, queries: createQueries(driver, { ready: storage.ready }), basePath: portalPath, collectorPath, secureCookies });
 
   return {
     collector,

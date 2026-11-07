@@ -1,6 +1,7 @@
 // The portal's configuration (users, sessions, sites) in the same SQL database as the events, through the
 // same driver (collector/storage.js).
 import { newSiteId } from '../collector/index.js';
+import { addColumns } from '../collector/storage.js';
 import { hashToken, newToken } from './auth.js';
 
 const SESSION_DAYS = 30;
@@ -11,11 +12,16 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS tb_sites (id TEXT PRIMARY KEY, name TEXT NOT NULL, origins TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);',
 ].join('\n');
 
-const siteFromRow = row => row && { id: row.id, name: row.name, origins: JSON.parse(row.origins), paused: Boolean(row.paused), created_at: row.created_at };
+// `consent` holds the site's consent settings (collector/consent.js); missing keys take the defaults.
+const parse = text => { try { return text ? JSON.parse(text) : {}; } catch { return {}; } };
+const siteFromRow = row => row && { id: row.id, name: row.name, origins: JSON.parse(row.origins), paused: Boolean(row.paused), created_at: row.created_at, consent: parse(row.consent) };
 
 export function createStore(driver, { now = Date.now } = {}) {
   let ready;
-  const init = () => (ready ??= Promise.resolve(driver.exec(SCHEMA)));
+  const init = () => (ready ??= (async () => {
+    await driver.exec(SCHEMA);
+    await addColumns(driver, 'tb_sites', [['consent', 'TEXT']]);
+  })());
   const all = async (sql, params = []) => { await init(); return driver.all(sql, params); };
   const one = async (sql, params) => (await all(sql, params))[0] || null;
   const run = async (sql, params = []) => { await init(); return driver.run(sql, params); };
@@ -54,6 +60,9 @@ export function createStore(driver, { now = Date.now } = {}) {
     },
     async updateSite(id, { name, origins, paused }) {
       await run('UPDATE tb_sites SET name = ?, origins = ?, paused = ? WHERE id = ?', [name, JSON.stringify(origins), paused ? 1 : 0, id]);
+    },
+    async updateConsent(id, consent) {
+      await run('UPDATE tb_sites SET consent = ? WHERE id = ?', [JSON.stringify(consent), id]);
     },
     // Removes the site and every event recorded for it.
     async deleteSite(id, eventsTable = 'tinybeam_events') {

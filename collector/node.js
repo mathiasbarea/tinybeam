@@ -20,7 +20,11 @@ export async function fromNode(req, { trustProxy = false } = {}) {
 }
 
 export async function toNode(response, res) {
-  res.writeHead(response.status, Object.fromEntries(response.headers));
+  const headers = Object.fromEntries(response.headers);
+  // Each cookie needs its own Set-Cookie header; Headers would join them into one.
+  const cookies = response.headers.getSetCookie();
+  if (cookies.length) headers['set-cookie'] = cookies;
+  res.writeHead(response.status, headers);
   res.end(response.body ? Buffer.from(await response.arrayBuffer()) : undefined);
 }
 

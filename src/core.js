@@ -17,7 +17,14 @@
   const site = attr('site');
   if (!site) return console.warn('tinybeam: data-site is missing');
   const endpoint = attr('endpoint', '/tb/e');
+  const base = endpoint.replace(/\/e$/, '');
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Where the stable ID is kept (docs/spec.md, section 5): by the collector in its own cookies, or, in the
+  // tinybeam-ids.js bundle (build flag IDS), by an endpoint on the site's server (data-id="endpoint") or
+  // by this script (data-id="script"); then the script reads the cookies and sends the ID and the decision
+  // with each batch. Every IDS-only expression starts with `IDS &&`, so the core bundle drops it.
+  const idMode = attr('id');
+  const ownIds = IDS && (idMode == 'endpoint' || idMode == 'script');
 
   let queue = [];
   let serverPv = attr('pv');
@@ -26,21 +33,62 @@
   // 128 random bits as base-36 text.
   const randomId = () => [].map.call(crypto.getRandomValues(new Uint32Array(4)), x => x.toString(36)).join('');
   const isVisible = () => d.visibilityState === 'visible';
+  const cookie = name => (d.cookie.match('(?:^|; )' + name + '=([^;]*)') || [])[1];
+  const ids = () => IDS && ownIds && { i: cookie('tb_id'), c: cookie('tb_c'), is: idMode[0] };
+  // A request whose answer matters (consent, the ID endpoint); `done` gets the parsed JSON.
+  const request = (method, url, data, done) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.setRequestHeader('Content-Type', 'text/plain');
+    xhr.onload = () => {
+      try { done && done(JSON.parse(xhr.responseText)); } catch (e) { /* not JSON: nothing to do */ }
+    };
+    xhr.send(data && JSON.stringify(data));
+  };
 
   // sendBeacon where it exists (every browser since 2018), XMLHttpRequest otherwise.
   const flush = () => {
     if (!queue.length) return;
-    const body = tx => JSON.stringify({
+    const body = tx => Object.assign({
       v: 1, s: site, u: loc.href, l: n.language, sw: screen.width, sh: screen.height, vw: w.innerWidth, vh: w.innerHeight,
       tz, pv, tx, wd: n.webdriver ? 1 : undefined, e: queue,
-    });
-    if (!(n.sendBeacon && n.sendBeacon(endpoint, body('b')))) {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', endpoint);
-      xhr.setRequestHeader('Content-Type', 'text/plain');
-      xhr.send(body('x'));
-    }
+    }, ids());
+    if (!(n.sendBeacon && n.sendBeacon(endpoint, JSON.stringify(body('b'))))) request('POST', endpoint, body('x'));
     queue = [];
+  };
+
+  // Tinybeam's consent banner, from the collector, in the page's language (or the browser's). The
+  // collector decides whether this visitor must be asked (and answers with nothing otherwise), unless
+  // `force` (a "privacy settings" click).
+  const banner = force => {
+    const s = d.createElement('script');
+    s.src = base + '/banner.js?s=' + site + '&l=' + (d.documentElement.lang || '') + ',' + n.language + (force ? '&f=1' : '') + (IDS && ownIds ? '&m=' + idMode[0] : '');
+    d.head.appendChild(s);
+  };
+  // consent(true | false | { analytics, ads }): the visitor's decision, kept as two digits ("10": analytics
+  // granted, ads refused) and recorded by the collector, which also sets its cookies in collector mode.
+  let decision, source;
+  const recordConsent = () => decision && request('POST', base + '/c', Object.assign({ s: site, u: loc.href, src: source }, ids(), { c: decision }));
+  // In script and endpoint mode, the ID: kept or created when analytics is granted or no decision is
+  // needed (a region where consent isn't required), deleted when refused.
+  const setCookie = IDS && ((name, value, days) => {
+    d.cookie = name + '=' + value + ';path=/;max-age=' + days * 864e2 + ';samesite=lax' + (loc.protocol == 'https:' ? ';secure' : '');
+  });
+  const keepId = IDS && (() => {
+    const allowed = !decision || decision[0] == '1';
+    if (idMode == 'script') {
+      if (decision) setCookie('tb_c', decision, 182);
+      setCookie('tb_id', allowed ? cookie('tb_id') || randomId() : '', allowed ? 395 : 0);
+      recordConsent();
+    } else request('POST', '/tb/id', decision ? { analytics: allowed, ads: decision[1] == '1' } : {}, recordConsent);
+  });
+  const consent = choice => {
+    flush();
+    const both = choice === !!choice;
+    decision = '' + +(both ? choice : !!choice.analytics) + +(both ? choice : !!choice.ads);
+    source = choice.source || 'api';
+    if (IDS && ownIds) keepId();
+    else recordConsent();
   };
   const push = (name, props) => {
     queue.push({ n: name, t: Date.now(), p: props || {} });
@@ -102,6 +150,8 @@
         tagged = 1;
         push(name, prefixed(el, 'data-tb-prop-'));
       }
+      // A "privacy settings" element opens the consent banner again.
+      if (el.hasAttribute('data-tb-consent')) banner(1);
       if (!linked && el.tagName === 'A' && !el.protocol.indexOf('http')) {
         linked = 1;
         // Any file extension other than a web page is a download candidate; the collector keeps the
@@ -121,6 +171,21 @@
   const listen = (target, type, fn, options) => target.addEventListener(type, fn, options);
   const start = () => {
     pageView(d.referrer);
+    // Consent: data-consent is "auto" when the site uses Tinybeam's banner (the collector decides whether
+    // to ask, while the visitor has no decision yet), or the visitor's state when a collector in front of
+    // the site filled it in ("pending": ask). With the ID kept by the site or the script, the collector
+    // also says when no consent is needed, so the ID can be created.
+    const state = attr('consent');
+    if (IDS && ownIds) {
+      if (!cookie('tb_c') && !cookie('tb_id')) {
+        request('GET', base + '/c?s=' + site + '&u=' + encodeURIComponent(loc.href) + '&m=' + idMode[0], 0, r => {
+          if (r.c == 'pending' && state) banner();
+          if (r.c == 'not_required') keepId();
+        });
+      }
+      // The endpoint renews its cookies once a day (tb_r marks that it did today).
+      if (idMode == 'endpoint' && cookie('tb_id') && !cookie('tb_r')) request('GET', '/tb/id');
+    } else if (state == 'auto' ? !cookie('tb_c') : state == 'pending') banner();
     listen(w, 'scroll', trackScroll, { passive: true });
     listen(d, 'click', clicked, true);
     listen(d, 'auxclick', clicked, true);
@@ -156,6 +221,7 @@
     setSession: setter('$session', 1),
     setUser: setter('$user', 1),
     reset: setter('$reset', 1),
+    consent,
     flush,
   };
 
