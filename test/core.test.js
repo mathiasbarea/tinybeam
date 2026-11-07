@@ -86,6 +86,12 @@ test('uses a configured endpoint and generates a page view ID when the server gi
   assert.deepEqual(sent[0].e[0].p, { title: 'Pricing' });
 });
 
+test('can send to a collector elsewhere, naming the site', async () => {
+  const { sent } = await load({ attrs: { 'data-endpoint': 'https://collect.example.net/tb/e', 'data-site': 'acme' } });
+  assert.equal(sent[0].endpoint, 'https://collect.example.net/tb/e');
+  assert.equal(sent[0].s, 'acme');
+});
+
 test('sends visible time and scroll depth when the page is hidden, and none twice', async () => {
   const { window, sent, clock, setVisibility } = await load({
     setup(window) {

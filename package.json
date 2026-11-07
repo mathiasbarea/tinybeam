@@ -2,7 +2,7 @@
   "name": "tinybeam",
   "version": "0.0.0",
   "private": true,
-  "description": "First-party web analytics that weighs almost nothing.",
+  "description": "First-party web analytics that weighs almost nothing: a tiny browser script and a portable collector.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -14,5 +14,15 @@
     "acorn": "^8.19.0",
     "esbuild": "^0.28.2",
     "jsdom": "^31.0.0"
+  },
+  "exports": {
+    ".": "./collector/index.js",
+    "./collector": "./collector/index.js",
+    "./collector/node": "./collector/node.js",
+    "./collector/cloudflare": "./collector/cloudflare.js",
+    "./dist/tinybeam.js": "./dist/tinybeam.js"
+  },
+  "engines": {
+    "node": ">=22.5"
   }
 }

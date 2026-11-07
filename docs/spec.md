@@ -33,7 +33,9 @@ be reported together with the base it comes from.
   the visitor actually opens it.
 - Configuration comes from `data-*` attributes on the script tag:
   - `data-endpoint`: collector path (default `/tb/e`),
-  - `data-pv`: the page view ID assigned by the server, when the collector serves the HTML (section 7).
+  - `data-site`: site ID, for a collector that serves several sites (sent as `s`),
+  - `data-pv`: left empty in the page; a collector in front of the site fills in the page view ID it
+    assigned (section 7). Empty means the script generates one.
 - Neutral paths (`/tb/`) are recommended; names such as `analytics.js` are commonly blocked by filter lists.
 - Page API: `tinybeam.track(name, props)` queues a custom event; `tinybeam.flush()` sends the queue now.
 
@@ -181,17 +183,54 @@ A batch sent when the page was hidden (with the sections and vitals modules):
 - `t` is the client time in ms; the collector also records its own receive time and uses it for ordering.
 - The collector answers `204 No Content`. Payloads over 16 KB are rejected.
 
-## 7. Collector enrichment
+## 7. Collector
+
+### Runtime and deployment
+
+The collector is a library built only on web-standard APIs (`Request`, `Response`, `URL`,
+`crypto.subtle`), so it is not tied to any provider:
+
+- `createCollector(options)` returns `handle(request, context)`, which answers `POST /tb/e` (events) and
+  `GET /tb/n` (noscript pixel), and `observe(request, response, context)` for a collector in front of the
+  site (server-side page views and bot requests).
+- `context` is what the platform knows about the client: `ip` (only used for the daily anonymous ID, never
+  stored), `country`, `region`, `city`, `verifiedBotCategory`, and `waitUntil` so storage doesn't delay the
+  response. Platform adapters fill it in: Node.js (`node:http`, X-Forwarded-For behind a trusted proxy) and
+  Cloudflare Workers (`request.cf`). Without an adapter, country comes from common CDN headers
+  (`cf-ipcountry`, `x-vercel-ip-country`, `cloudfront-viewer-country`…).
+- Storage is any object with `write(records)`. Included: SQL databases through a two-method driver
+  (`exec`, `run`; drivers for SQLite via `node:sqlite` and Cloudflare D1), JSON Lines files, and memory.
+  Records are flat rows (one per event); the column list is `COLUMNS` in `collector/storage.js`.
+- The daily salt and the sessions live in memory by default. Running several collector instances needs a
+  shared salt and session store, passed as options (`salt`, `sessions`).
+
+Ways to deploy, same code: a standalone server (behind a reverse-proxy rule for `/tb/` on the site's
+domain, to stay first-party), a proxy or Worker in front of the site, mounted inside the site's own server,
+or a hosted collector serving many sites.
+
+### Sites
+
+Without `sites`, the collector accepts any page and uses the page's host as the site ID (single-site
+self-hosting). With `sites: [{ id, origins }]`, a batch must name its site (`s`, from `data-site`; optional
+when there is only one site), its page URL must be one of the site's origins, and so must the `Origin`
+header when the browser sends one; anything else gets `403`. Responses allow those origins through CORS, so
+a collector on another domain works too.
+
+### Enrichment
 
 The collector adds, per event:
 
-- `device` (`mobile`, `tablet`, `desktop`, `bot`), `browser`, `browser_version`, `os`, `os_version`, from
-  the user agent and User-Agent Client Hints when available,
-- `country`, `region`, `city` from the edge (for example `request.cf` on Cloudflare); the IP itself is not stored,
-- `sid`, `aid` (section 4), `new_visitor` in `consented` mode,
-- `referrer_type`: `direct`, `search`, `social`, `ai_assistant`, `email`, `paid`, `referral`, `internal`,
-- `engaged_session`: true once a session has more than 10 s of visible time, two page views, or a conversion
-  event.
+- `device` (`mobile`, `tablet`, `desktop`), `browser`, `browser_version`, `os`, `os_version`, from the user
+  agent and User-Agent Client Hints when available,
+- `country`, `region`, `city` from the platform or headers; the IP itself is not stored,
+- `aid`, `sid` (section 4); bots get no session,
+- on page views: `referrer_type` (`direct`, `internal`, `paid`, `email`, `ai_assistant`, `search`,
+  `social`, `referral`), `referrer_host`, campaign parameters and the first click ID found
+  (`click_id_type`, `click_id`),
+- `traffic` (`human` or `bot`) and, for bots, `bot_name`, `bot_category`, `bot_verified`.
+
+Computed when querying, not stored: `engaged_session` (more than 10 s of visible time, two page views, or a
+conversion event), `new_visitor` (`consented` mode).
 
 ### Visits without JavaScript
 
@@ -200,7 +239,7 @@ A page view can reach the collector three ways, and each record says which ones 
 | Source | How | Requires |
 | --- | --- | --- |
 | Server | The collector logs every HTML request it serves | The collector in front of the site (for example a Cloudflare Worker) |
-| Noscript | `<noscript><img src="/tb/n" alt="" width="1" height="1"></noscript>` in the page; only browsers with JavaScript off load it. The page URL comes from the `Referer` header (same origin) | Nothing extra |
+| Noscript | `<noscript><img src="/tb/n" alt="" width="1" height="1"></noscript>` in the page; only browsers with JavaScript off load it. The page URL comes from the `Referer` header; a collector with several sites takes the site ID as `?s=` | Nothing extra |
 | Script | The browser script | JavaScript |
 
 From those, each page view gets `js`:
@@ -326,8 +365,8 @@ Settled during review (2026-11-07):
 1. **Sessions** end after 30 min without events, GA4's default, so numbers are comparable. No midnight cut.
 2. **No per-tab ID in `anonymous` mode.** `sessionStorage` may count as device storage under ePrivacy, so
    nothing is stored without consent.
-3. **Storage** in the reference collector: Workers Analytics Engine for aggregates, with optional raw
-   events in R2.
+3. **Storage** is any SQL database through a minimal driver (SQLite and D1 included), so the collector
+   isn't tied to a provider. Superseded the earlier plan of Workers Analytics Engine + R2.
 4. **One file per site.** Modules are selected at build time and bundled into a single script, so the page
    makes one request.
 5. **Event names** follow GA4 where an equivalent exists (`page_view`, `search`, `sign_up`, `login`,
@@ -341,3 +380,5 @@ Settled during review (2026-11-07):
 9. **Core budget is 1.5 KB** and SPA navigation is part of the core, not a separate bundle: one script fits
    every site, and the extra half kilobyte has no measurable effect on loading.
 10. **The page view is sent as soon as the script runs**, not after the `load` event.
+11. **The collector runs anywhere** (web-standard APIs, platform adapters), and the script can send to a
+    collector on another domain, so the same code serves self-hosting and a hosted service.

@@ -2,12 +2,12 @@
 
 First-party web analytics that weighs almost nothing.
 
-Tinybeam is a tiny browser script plus a collector that runs on your own domain. The script measures what
-people actually do on a page and sends it to your server; your server enriches the events and forwards them
-to wherever you want them: your own storage, GA4, Meta, or any other destination.
+Tinybeam is a tiny browser script plus a collector you can run anywhere. The script measures what people
+actually do on a page and sends it to the collector; the collector enriches the events, stores them and
+forwards them to wherever you want them: your own database, GA4, Meta, or any other destination.
 
-> **Status: early development.** The browser core is written and tested; the modules (sections, Web
-> Vitals) and the collector are next. The event and identity model is drafted in
+> **Status: early development.** The browser core and the collector are written and tested; the browser
+> modules (sections, Web Vitals), consent mode and destinations are next. The event and identity model is drafted in
 > [`docs/spec.md`](docs/spec.md). Feedback is welcome in issues.
 
 ## Why
@@ -30,8 +30,9 @@ Tinybeam takes the opposite approach:
 
 1. **Tiny.** Core under 1.5 KB compressed; core plus every module under 3 KB. Loaded with `defer`, so it
    never blocks rendering. A size budget is enforced in CI.
-2. **First-party.** The script and the collector live on your own domain. No new connections, no
-   third-party cookies, no vendor code in the page.
+2. **First-party.** The script and the collector can live on your own domain: no new connections, no
+   third-party cookies, no vendor code in the page. The script can also send to a collector elsewhere,
+   such as a hosted one.
 3. **Private by default.** No cookies and no persistent identifier without consent. No IP addresses
    stored. No fingerprinting. Respects Global Privacy Control.
 4. **One identity, many destinations.** Tinybeam owns a stable anonymous ID and translates it for each
@@ -40,8 +41,9 @@ Tinybeam takes the opposite approach:
    flagged instead of silently missing, so every number comes with the base it was computed from (for
    example, how many visitors were excluded from INP because their browser doesn't support it).
 6. **Modular.** Each site ships only the modules it uses.
-7. **Edge-native.** The reference collector targets Cloudflare Workers (Analytics Engine, Queues, R2),
-   with no servers to run. The wire format is documented so other collectors can exist.
+7. **Runs anywhere.** The collector is built only on web-standard APIs, so the same code runs on Node.js,
+   Deno, Bun, Cloudflare Workers and other runtimes, and stores in any SQL database through a two-method
+   driver. Nothing ties it to one provider. The wire format is documented so other collectors can exist.
 
 ## What it measures
 
@@ -72,39 +74,89 @@ Tinybeam takes the opposite approach:
 ## How it fits together
 
 ```
-browser                         your domain (collector)                 destinations
+browser                         collector (any runtime)                 destinations
 ───────                         ───────────────────────                 ────────────
-tinybeam.js ── sendBeacon ──▶   POST /tb/e                              
-  core + modules                  validate, enrich (UA, geo, session)   
-                                  store ─────────────────────────────▶  Analytics Engine / R2 / SQL
+tinybeam.js ── sendBeacon ──▶   POST /tb/e
+  core + modules                  validate, enrich (UA, geo, session)
+                                  store ─────────────────────────────▶  SQLite, D1, Postgres, …
                                   route + map IDs ───────────────────▶  GA4 Measurement Protocol,
-                                                                        Meta Conversions API, …
+                                                                        Meta Conversions API, … (planned)
 ```
+
+## Using it
+
+**1. Add the script** to your pages. It can be served from your own domain (recommended):
+
+```html
+<script src="/tb/tinybeam.js" data-pv defer></script>
+```
+
+| Attribute | Meaning |
+| --- | --- |
+| `data-endpoint` | Where to send events. Default `/tb/e` on the same site; can be a full URL to a collector elsewhere. |
+| `data-site` | Site ID, for a collector that serves several sites. |
+| `data-pv` | Left empty; a collector in front of the site fills in the page view ID (see below). |
+
+Optionally, to count visitors with JavaScript disabled:
+
+```html
+<noscript><img src="/tb/n" alt="" width="1" height="1"></noscript>
+```
+
+**2. Run a collector.** Three ways, all with the same code:
+
+- **Standalone on Node.js** (22.5+), storing in SQLite: [`examples/node-server.js`](examples/node-server.js).
+  Route `/tb/` on your domain to it with your reverse proxy (nginx, Caddy, your host's rewrites) to keep
+  it first-party.
+- **In front of your site** (Cloudflare Worker, or any server that sees your page requests):
+  [`examples/cloudflare-worker.js`](examples/cloudflare-worker.js). Besides the script's events it records
+  server-side page views (visits whose browser never ran the script) and every bot request.
+- **Inside your own server**: `collector.handle(request, context)` takes a standard `Request` and returns a
+  `Response`, so it mounts in any framework that speaks web-standard requests (Hono, Next.js route
+  handlers, Remix, SvelteKit, Deno, Bun…). The Node.js adapter (`fromNode`, `toNode`) covers Express-style
+  servers.
+
+```js
+import { createCollector, sqlStorage } from 'tinybeam/collector';
+
+const collector = createCollector({
+  storage: sqlStorage(myDriver), // { exec(sql), run(sql, params) } over any SQL client
+  sites: [{ id: 'my-site', origins: ['https://example.com'] }], // optional; omit for a single site
+});
+```
+
+`context` carries what the platform knows about the client: `ip` (used only to compute the daily
+anonymous ID, never stored), `country`/`region`/`city`, `verifiedBotCategory` and `waitUntil`. Adapters
+fill it in; without one, country is read from common CDN headers.
 
 ## Development
 
-Requires Node.js 20 or later.
+Requires Node.js 22.5 or later (SQLite tests use `node:sqlite`).
 
 | Command | What it does |
 | --- | --- |
 | `npm run build` | Builds the bundles into `dist/` and prints their minified and brotli sizes. |
 | `npm run size` | Same, and fails if a bundle is over its budget. |
-| `npm test` | Runs the bundles in jsdom and checks what they send, that they parse as ES2015 and fit their budgets. |
+| `npm test` | Runs the browser bundles in jsdom (what they send, ES2015 syntax, size budgets) and the collector (validation, enrichment, bots, storage, adapters). |
 
-The source is `src/core.js`. Modules are build flags in `build.mjs`: code behind a flag that is off is
-dropped from that bundle.
+The browser script is `src/core.js`; modules will be build flags in `build.mjs` (code behind a flag that
+is off is dropped from that bundle). The collector is `collector/`: `index.js` (handling and records),
+`enrich.js` (user agent, referrer, campaign, geo), `bots.js` (the bot list), `storage.js`, and the
+platform adapters `node.js` and `cloudflare.js`.
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
-| `tinybeam.js` | Core, including History API navigations | 1,091 B | 1,536 B |
+| `tinybeam.js` | Core, including History API navigations | 1,105 B | 1,536 B |
 
 ## Roadmap
 
 1. Spec: events, identity, consent modes, wire format ([`docs/spec.md`](docs/spec.md)).
-2. Browser core (done) and modules, with a size budget in CI.
-3. Reference collector for Cloudflare Workers, with storage and a minimal dashboard.
+2. Browser core (done) and modules (sections, Web Vitals), with a size budget in CI.
+3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent mode, minimal
+   dashboard.
 4. First destinations: GA4 Measurement Protocol and Meta Conversions API.
 5. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).
+6. A hosted collector for sites that don't want to run one.
 
 ## License
 

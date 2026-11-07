@@ -11,7 +11,10 @@
 
   const script = d.currentScript;
   const attr = (name, fallback) => (script && script.getAttribute('data-' + name)) || fallback;
+  // The collector can be the site's own (default) or anywhere else, such as a hosted one; `data-site`
+  // tells a collector that serves several sites which one this is.
   const endpoint = attr('endpoint', '/tb/e');
+  const site = attr('site');
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   let queue = [];
@@ -26,7 +29,7 @@
   const flush = () => {
     if (!queue.length) return;
     const body = tx => JSON.stringify({
-      v: 1, u: loc.href, l: n.language, sw: screen.width, sh: screen.height, vw: w.innerWidth, vh: w.innerHeight,
+      v: 1, s: site, u: loc.href, l: n.language, sw: screen.width, sh: screen.height, vw: w.innerWidth, vh: w.innerHeight,
       tz, pv, tx, wd: n.webdriver ? 1 : undefined, e: queue,
     });
     if (!(n.sendBeacon && n.sendBeacon(endpoint, body('b')))) {
