@@ -618,4 +618,6 @@ Settled during review (2026-11-07):
     collector anywhere (13 months), or cookies written by the script (nothing to install, 7 days in
     Safari). A subdomain pointing to another provider is not offered as equivalent, since Safari caps
     cookies set by a server whose IP address doesn't match the site's. The endpoint generates the ID itself
-    instead of receiving it, so no one can plant an ID in a visitor's browser.
+    instead of receiving it, so no one can plant an ID in a visitor's browser. The owner doesn't choose
+    among them: the portal asks where the site is hosted and shows only the way that fits (portal,
+    Installation).

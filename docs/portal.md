@@ -43,6 +43,24 @@ The equivalent of a GA4 property. Adding a site takes a name and its origins and
 snippet to paste (script tag and noscript pixel). A site can be paused (data rejected) or deleted (data
 removed after a grace period).
 
+### Installation
+
+The three ways to keep the stable ID (spec, section 5) exist so that every host has one that works, not as
+a technical choice for the owner. The installation page asks one question, where the site is hosted, and
+shows only what fits, ready to copy:
+
+| Host | Shown | Stable ID |
+| --- | --- | --- |
+| Vercel, Netlify, Cloudflare, a server with Nginx, Apache or Caddy | The proxy rule for `/tb/` (one line in `vercel.json`, `_redirects`, a Worker, the server config) and the script tag | `collector`, 13 months |
+| WordPress | The Tinybeam plugin (it adds the script and the endpoint, and updates itself) | `endpoint`, 13 months |
+| Shared hosting with PHP, or an app server (Node.js, Python…) | The endpoint file for that language and the script tag | `endpoint`, 13 months |
+| Wix, Squarespace, Shopify, GitHub Pages and other hosts without server rules or code | The script tag only, with a note that Safari recognizes returning visitors for 7 days | `script` |
+| Self-hosted collector on the site's own server | The script tag (the collector is already on the site's domain) | `collector`, 13 months |
+
+The page then waits for the first events and checks how they arrived: if the site was set up for the proxy
+or the endpoint but events show `id_store: script`, it says so and points to what is likely missing. The
+same check stays on the site's settings page.
+
 ## Consent
 
 Per site (spec, section 5):
@@ -50,9 +68,9 @@ Per site (spec, section 5):
 - mode: automatic by region (default), ask everyone, or never ask (anonymous only, or full everywhere),
 - the regions that require consent, country by country (default: EU/EEA, United Kingdom, Switzerland),
 - what a refusal means: counted without an identifier (default) or not measured,
-- where the stable ID is kept: the collector under a path of the site (recommended), an endpoint on the
-  site's server, or the script (spec, section 5), with the proxy rule or the endpoint file to copy for
-  common platforms, and a check that says which one the site's traffic is actually using,
+- where the stable ID is kept (collector under a path of the site, endpoint, or script; spec, section 5)
+  is not a setting the owner picks from a list: it follows from the installation (below), and the portal
+  shows which one the site's traffic is actually using,
 - the banner: Tinybeam's own or the site's existing one (a CMP calling `tinybeam.consent()`); for
   Tinybeam's, the default language or "follow the page", texts per language (built-in translations,
   editable, more languages can be added), the privacy policy link per language, position and colors, and
