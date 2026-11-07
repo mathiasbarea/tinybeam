@@ -187,14 +187,8 @@ test('loading the script twice measures once', async () => {
   assert.equal(sent.length, 1);
 });
 
-test('the core bundle ignores History API navigations', async () => {
-  const { window, sent } = await load();
-  window.history.pushState({}, '', '/other/');
-  assert.equal(sent.length, 1);
-});
-
-test('the SPA bundle turns History API navigations into page views', async () => {
-  const { window, sent, clock } = await load({ name: 'tinybeam.spa.js' });
+test('History API navigations are page views', async () => {
+  const { window, sent, clock } = await load();
   clock.now += 3000;
   window.history.pushState({}, '', '/docs/');
   window.history.replaceState({}, '', '/docs/#install'); // hash only: same page

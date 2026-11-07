@@ -28,8 +28,8 @@ Tinybeam takes the opposite approach:
 
 ## Principles
 
-1. **Tiny.** Core under 1 KB compressed; core plus every module under 3 KB. Loaded after the page is
-   interactive. A size budget is enforced in CI.
+1. **Tiny.** Core under 1.5 KB compressed; core plus every module under 3 KB. Loaded with `defer`, so it
+   never blocks rendering. A size budget is enforced in CI.
 2. **First-party.** The script and the collector live on your own domain. No new connections, no
    third-party cookies, no vendor code in the page.
 3. **Private by default.** No cookies and no persistent identifier without consent. No IP addresses
@@ -96,8 +96,7 @@ dropped from that bundle.
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
-| `tinybeam.js` | Core | 1,022 B | 1,024 B |
-| `tinybeam.spa.js` | Core + History API navigations | 1,125 B | 1,152 B |
+| `tinybeam.js` | Core, including History API navigations | 1,091 B | 1,536 B |
 
 ## Roadmap
 

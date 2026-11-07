@@ -105,31 +105,30 @@
     listen(w, 'pagehide', hidden);
     // Restored from the back/forward cache: a new page view for the visitor.
     listen(w, 'pageshow', e => e.persisted && pageView());
-    // Single-page apps (build flag): History API navigations are page views too.
-    if (TB_SPA) {
-      const navigated = () => {
-        if (loc.href.split('#')[0] !== lastUrl.split('#')[0]) {
-          engage();
-          flush();
-          pageView(lastUrl);
-        }
+    // Single-page apps: History API navigations are page views too (a change of hash alone is not).
+    const navigated = () => {
+      if (loc.href.split('#')[0] !== lastUrl.split('#')[0]) {
+        engage();
+        flush();
+        pageView(lastUrl);
+      }
+    };
+    ['pushState', 'replaceState'].forEach(method => {
+      const original = history[method];
+      history[method] = function () {
+        const result = original.apply(this, arguments);
+        navigated();
+        return result;
       };
-      ['pushState', 'replaceState'].forEach(method => {
-        const original = history[method];
-        history[method] = function () {
-          const result = original.apply(this, arguments);
-          navigated();
-          return result;
-        };
-      });
-      listen(w, 'popstate', navigated);
-    }
+    });
+    listen(w, 'popstate', navigated);
   };
 
   w.tinybeam = { track: (name, props) => push(name, props || {}), flush };
 
-  // A prerendered page (speculation rules) counts only once the visitor actually opens it.
-  const whenLoaded = () => (d.readyState === 'complete' ? start() : listen(w, 'load', start));
-  if (d.prerendering) listen(d, 'prerenderingchange', whenLoaded);
-  else whenLoaded();
+  // Starts as soon as the script runs: the beacon is a small, low-priority request that doesn't hold up
+  // the page, and waiting for `load` would lose visitors who leave a slow page early. A prerendered page
+  // (speculation rules) counts only once the visitor actually opens it.
+  if (d.prerendering) listen(d, 'prerenderingchange', start);
+  else start();
 })(window, document, navigator, location);

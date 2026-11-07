@@ -25,11 +25,12 @@ be reported together with the base it comes from.
 ```
 
 - One file per site: the modules the site uses are selected at build time and bundled with the core.
-  Available today: the core (`tinybeam.js`) and core + SPA navigation (`tinybeam.spa.js`).
+  Available today: the core (`tinybeam.js`), which includes SPA navigation.
 - Served from the site's own origin with long-lived, immutable caching (hashed file name in builds).
-- Starts once the page has loaded, and sends the `page_view` right then. A prerendered page (speculation
-  rules) waits until the visitor actually opens it. Visitors who leave before the page loads are still
-  counted by server-side page views (section 7).
+- Starts as soon as it runs (with `defer`, right after the HTML is parsed) and sends the `page_view` then.
+  The beacon is a small, low-priority request that doesn't delay rendering, and waiting for the `load`
+  event would lose visitors who leave a slow page early. A prerendered page (speculation rules) waits until
+  the visitor actually opens it.
 - Configuration comes from `data-*` attributes on the script tag:
   - `data-endpoint`: collector path (default `/tb/e`),
   - `data-pv`: the page view ID assigned by the server, when the collector serves the HTML (section 7).
@@ -44,7 +45,7 @@ Every event shares an envelope (section 6). Event-specific fields go in `p` (pro
 
 | Event | When | Properties |
 | --- | --- | --- |
-| `page_view` | Page load, restore from the back/forward cache, and History API navigations (SPA bundle) | `title`, `ref` (referrer, when there is one) |
+| `page_view` | Page load, restore from the back/forward cache, and History API navigations | `title`, `ref` (referrer, when there is one) |
 | `engagement` | When the page is hidden, and before an SPA navigation; not sent when no visible time passed | `ms` (visible time since the last `engagement`), `scroll` (max depth reached: 0, 25, 50, 75, 100) |
 | `outbound` | Click (or middle click) on a link to another host | `url` |
 | `download` | Click on a link with a `download` attribute or whose path ends in a file extension other than a web page (`.html`, `.htm`, `.php`, `.asp`, `.aspx`) | `url` |
@@ -299,9 +300,8 @@ Destinations are configured in the collector, never in the page:
 
 | Bundle | Budget (brotli) |
 | --- | --- |
-| Core | 1 KB |
-| Core + SPA navigation | 1.125 KB |
-| Core + sections | 1.5 KB |
+| Core (including SPA navigation) | 1.5 KB |
+| Core + sections | 2 KB |
 | Core + all modules | 3 KB |
 
 - Bundles are minified: no whitespace or comments, local names shortened.
@@ -338,3 +338,6 @@ Settled during review (2026-11-07):
 7. **Visits without JavaScript count**, through server-side page views and a noscript pixel (section 7).
 8. **Bots are measured separately**, classified by name and category with verification where possible,
    excluded from human reports and from destinations unless opted in (sections 7 and 8).
+9. **Core budget is 1.5 KB** and SPA navigation is part of the core, not a separate bundle: one script fits
+   every site, and the extra half kilobyte has no measurable effect on loading.
+10. **The page view is sent as soon as the script runs**, not after the `load` event.

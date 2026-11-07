@@ -6,10 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants } from 'node:zlib';
 
-export const BUNDLES = [
-  { name: 'tinybeam.js', flags: { TB_SPA: false }, budget: 1024 },
-  { name: 'tinybeam.spa.js', flags: { TB_SPA: true }, budget: 1152 },
-];
+export const BUNDLES = [{ name: 'tinybeam.js', flags: {}, budget: 1536 }];
 
 export async function bundle(flags) {
   const result = await build({
