@@ -163,13 +163,14 @@ script data."* Queries can filter on any of these states.
 
 | ID | Field | Lifetime | Who creates it |
 | --- | --- | --- | --- |
-| Anonymous ID | `aid` | Depends on the consent state (section 5): 13 months, one day, or none | Collector |
+| Anonymous ID | `aid` | Depends on the consent state and where it's kept (section 5): 13 months, 7 days, one day, or none | Collector, or the site's endpoint or the script (section 5) |
 | Session ID | `sid` | Ends after 30 min without events; none when consent is `denied` | Collector |
 | User ID | `uid` | Set by the site with `tinybeam.setUser({ id })`; cleared by `reset()` | Site |
 | Page view ID | `pv` | One page view; ties `engagement`, `section_view` and `vitals` to their `page_view` | Script |
 
-- The stable anonymous ID is an `HttpOnly`, `Secure`, `SameSite=Lax` first-party cookie set by the
-  collector, so it survives the 7-day cap that Safari applies to cookies and storage written by JavaScript.
+- The stable anonymous ID is a first-party cookie, preferably `HttpOnly`, `Secure`, `SameSite=Lax` and set
+  by a server on the site's own domain, so it survives the 7-day cap that Safari applies to cookies written
+  by JavaScript (section 5 lists the three ways and what each costs).
 - `setUser({ id })` links the anonymous ID and session to the user ID in the collector. Earlier events stay
   attached to the anonymous ID; destinations that support it receive both.
 - Format: 128-bit random values as URL-safe text (the script uses base 36), no embedded meaning.
@@ -233,20 +234,59 @@ portal:
 
 Country from the IP is approximate (VPNs, travelers); "ask everyone" avoids depending on it.
 
-### The decision record and the cookie
+### The decision record
 
-- A decision is sent with `POST /tb/c` (`XMLHttpRequest`, not a beacon, so the response can set the cookie
-  reliably) and stored as a `kind: "set"` record named `$consent` with `{ analytics, ads, source }`
-  (`source`: `banner`, `api`). It carries no IP, and when the decision is a refusal, no ID either. These
-  records are the proof of consent that the GDPR asks a site to be able to show, and what counts refusals
-  when refusals aren't measured.
-- The decision is remembered in a first-party cookie, `tb_c` (`analytics` and `ads`, `HttpOnly`, `Secure`,
-  `SameSite=Lax`, 6 months), so the banner doesn't come back on every page. Remembering a refusal is
-  strictly necessary for it to be respected, so it needs no consent itself. With consent, the stable ID is
-  a second cookie, `tb_id` (13 months).
-- Cookies are set by the collector on the site's own domain. A collector on another domain is a third
-  party for the browser, and Safari and Firefox block its cookies; consent needs the collector under
-  the site's domain (a `/tb/` path or a subdomain).
+A decision is sent at once to the collector with `POST /tb/c` (`XMLHttpRequest`, not a beacon, so in
+`collector` mode the response can set the cookies reliably; in the other modes the cookies are written as
+described below). It is stored as a `kind: "set"` record named `$consent` with
+`{ analytics, ads, source }` (`source`: `banner`, `api`). It carries no IP, and when the decision is a
+refusal, no ID either. These records are the proof of consent that the GDPR asks a site to be able to show,
+and what counts refusals when refusals aren't measured.
+
+### Where the stable ID and the decision are kept
+
+Two first-party cookies on the site's domain:
+
+- `tb_c`: the decision (`analytics` and `ads`), 6 months, so the banner doesn't come back on every page.
+  Remembering a refusal is strictly necessary for it to be respected, so it needs no consent itself.
+- `tb_id`: the stable anonymous ID, 13 months, only with consent (`granted` or `not_required`).
+
+Browsers only keep cookies for the site that set them, and Safari also caps cookies at 7 days when they are
+written by JavaScript, or set by a server whose IP address doesn't match the site's (a subdomain pointing
+to another provider counts as such). So where the cookies are written decides how long a returning visitor
+is recognized. There are three ways, chosen per site; every event records which one it used in `id_store`
+(`collector`, `endpoint`, `script`, or empty when there is no stable ID), so reports can be filtered and
+compared by it:
+
+| `id_store` | How | Needs on the site | Lifetime in Safari |
+| --- | --- | --- | --- |
+| `collector` (recommended) | The collector answers under the site's own domain, at a `/tb/` path (a proxy rule, a Worker, or mounted in the site's server), and sets `HttpOnly` cookies in its responses | A proxy or rewrite rule (one line in Cloudflare, Vercel, Netlify, Nginx…) | 13 months |
+| `endpoint` | A small endpoint on the site's own server, `/tb/id`, keeps the cookies; the script calls it, then sends events straight to a collector on any domain | A short server file (examples for PHP/WordPress, Node.js and others) | 13 months |
+| `script` | The script writes the cookies itself and sends events to a collector on any domain | Nothing | 7 days (24 h when arriving from a link with tracking parameters) |
+
+- A collector on another domain can't set cookies for the site: its own would be third-party cookies, which
+  Safari and Firefox block. That is why the last two ways send the ID and the decision in the batch (`i`
+  and `c`, section 6) instead.
+- A subdomain served by the same provider as the site (both behind Cloudflare, for example) keeps the 13
+  months; one that points to another provider is capped. Tinybeam can't know the IP addresses involved,
+  so the portal recommends a path, and the 7-day cap is verified in Safari, not assumed.
+
+**The endpoint** answers two requests from the browser, on the same origin as the page:
+
+- `GET /tb/id`: returns `{ "i": ID or null, "c": decision or null }` from its cookies and renews `tb_id`.
+  The script calls it at most once a day per visitor, keeping the answer in memory for the page.
+- `POST /tb/id` with `{ "analytics": bool, "ads": bool }`: stores the decision in `tb_c`; with `analytics`
+  granted it creates `tb_id` (a random ID it generates itself), and with `analytics` refused it deletes it.
+  With an empty body it only creates `tb_id`, for regions where consent isn't required.
+
+The endpoint generates the ID instead of receiving it, so no link or third party can plant an ID chosen by
+someone else in a visitor's browser. It needs no configuration or secrets, and it doesn't know the
+visitor's region, which the collector still decides: when the script has neither an ID nor a decision, it
+asks the collector (`GET /tb/c`, below), and only if consent isn't required there does it ask the endpoint
+to create the ID.
+
+**Script mode** writes `tb_id` and `tb_c` with `document.cookie` (not `HttpOnly`, so other scripts on the
+page can read them). In Safari the decision expires with the ID, so the banner can come back after 7 days.
 
 ### Page API
 
@@ -264,8 +304,9 @@ must see it, so the core stays within its budget (section 9).
 
 - The snippet carries `data-consent="auto"` when the site uses Tinybeam's banner. A collector in front of
   the site replaces it with the resolved state (`pending`, `granted`, `denied`, `not_required`), as it does
-  with `data-pv`. Without one, the core asks `GET /tb/c?s=SITE_ID` (one small request, only on sites that
-  use the banner), which answers with the state.
+  with `data-pv`. Without one, the core asks `GET /tb/c?s=SITE_ID`, which answers with the state. That
+  small request is only made on sites that use the banner or keep the ID in `endpoint` or `script` mode,
+  and only while the visitor has neither an ID nor a decision.
 - If the state is `pending`, the core loads `/tb/banner.js?s=SITE_ID&l=LANG`; the collector serves it with
   that site's texts in that language.
 - The banner asks only for what needs consent (returning-visitor cookie, advertising platforms), with
@@ -318,6 +359,10 @@ A batch sent when the page was hidden (with the sections and vitals modules):
 ```
 
 - `wd: 1` is added when `navigator.webdriver` is true (an automated browser; see bot traffic, section 7).
+- `i` (the stable anonymous ID) and `c` (the consent decision, `{ "a": 1, "d": 0 }` for analytics and ads)
+  are added only when the ID is kept by the site's endpoint or by the script (section 5); in `collector`
+  mode the collector reads them from its own cookies. The collector still applies the visitor's region
+  and Global Privacy Control, and ignores `i` when the resulting state doesn't allow a stable ID.
 - Short keys keep the payload small; the collector expands them.
 - `t` is the client time in ms; the collector also records its own receive time and uses it for ordering.
 - The collector answers `204 No Content`. Payloads over 16 KB are rejected.
@@ -368,8 +413,8 @@ The collector adds, per event:
   agent and User-Agent Client Hints when available,
 - `country`, `region`, `city` from the platform or headers; the IP itself is not stored,
 - `aid`, `sid` (section 4); bots get no session,
-- `consent` and `ads_consent` (section 5), from the decision cookie, the visitor's region, the site's
-  settings and Global Privacy Control,
+- `consent` and `ads_consent` (section 5), from the decision (cookie or `c`), the visitor's region, the
+  site's settings and Global Privacy Control, and `id_store`, where the stable ID was kept,
 - on page views: `referrer_type` (`direct`, `internal`, `paid`, `email`, `ai_assistant`, `search`,
   `social`, `referral`), `referrer_host`, campaign parameters and the first click ID found
   (`click_id_type`, `click_id`),
@@ -568,3 +613,9 @@ Settled during review (2026-11-07):
     refused with an identifier, even a daily one, is the riskiest case under the GDPR. Every event records
     its consent state, so dashboards count and filter by it. Tinybeam's own banner is optional, in a
     separate file, with texts per language; sites with a CMP call `tinybeam.consent()` instead.
+15. **Three ways to keep the stable ID**, recorded on every event as `id_store`: the collector under the
+    site's own path (recommended, 13 months), a small endpoint on the site's server with events sent to a
+    collector anywhere (13 months), or cookies written by the script (nothing to install, 7 days in
+    Safari). A subdomain pointing to another provider is not offered as equivalent, since Safari caps
+    cookies set by a server whose IP address doesn't match the site's. The endpoint generates the ID itself
+    instead of receiving it, so no one can plant an ID in a visitor's browser.

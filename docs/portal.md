@@ -50,6 +50,9 @@ Per site (spec, section 5):
 - mode: automatic by region (default), ask everyone, or never ask (anonymous only, or full everywhere),
 - the regions that require consent, country by country (default: EU/EEA, United Kingdom, Switzerland),
 - what a refusal means: counted without an identifier (default) or not measured,
+- where the stable ID is kept: the collector under a path of the site (recommended), an endpoint on the
+  site's server, or the script (spec, section 5), with the proxy rule or the endpoint file to copy for
+  common platforms, and a check that says which one the site's traffic is actually using,
 - the banner: Tinybeam's own or the site's existing one (a CMP calling `tinybeam.consent()`); for
   Tinybeam's, the default language or "follow the page", texts per language (built-in translations,
   editable, more languages can be added), the privacy policy link per language, position and colors, and
