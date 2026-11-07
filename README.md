@@ -7,7 +7,7 @@ actually do on a page and sends it to the collector; the collector enriches the 
 forwards them to wherever you want them: your own database, GA4, Meta, or any other destination.
 
 > **Status: early development.** The browser core and the collector are written and tested; the browser
-> modules (sections, Web Vitals), consent mode and destinations are next. The event and identity model is drafted in
+> modules (sections, Web Vitals), consent and destinations are next. The event and identity model is drafted in
 > [`docs/spec.md`](docs/spec.md). Feedback is welcome in issues.
 
 ## Why
@@ -33,8 +33,11 @@ Tinybeam takes the opposite approach:
 2. **First-party.** The script and the collector can live on your own domain: no new connections, no
    third-party cookies, no vendor code in the page. The script can also send to a collector elsewhere,
    such as a hosted one.
-3. **Private by default.** No cookies and no persistent identifier without consent. No IP addresses
-   stored. No fingerprinting. Respects Global Privacy Control.
+3. **Private by default.** Where consent is required, no cookies and no persistent identifier until the
+   visitor accepts, and nothing that identifies someone who refused. Which regions ask, and whether to
+   ask everyone, is set per site; an optional banner comes with texts in several languages. No IP
+   addresses stored. No fingerprinting. Respects Global Privacy Control. Every event records its consent
+   state, so reports can be filtered by it.
 4. **One identity, many destinations.** Tinybeam owns a stable anonymous ID and translates it for each
    destination (for example GA4 `client_id`, Meta `external_id`, Clarity `identify`).
 5. **Honest about gaps.** Old browsers are measured, not dropped. Whatever a browser can't measure is
@@ -154,9 +157,9 @@ platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index
 
 ## Roadmap
 
-1. Spec: events, identity, consent modes, wire format ([`docs/spec.md`](docs/spec.md)).
+1. Spec: events, identity, consent by region, wire format ([`docs/spec.md`](docs/spec.md)).
 2. Browser core (done) and modules (sections, Web Vitals), with a size budget in CI.
-3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent mode.
+3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent by region with an optional banner.
 4. The portal, on a URL the owner chooses, with no terminal needed ([`docs/portal.md`](docs/portal.md)):
    owner account, sites and first dashboards (done); roles, filters, transformations and destinations
    next.

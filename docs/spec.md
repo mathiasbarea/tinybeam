@@ -10,7 +10,7 @@ This document defines:
 - the events the browser script sends and their fields,
 - how every measurement records whether the browser could take it (capabilities and coverage),
 - the identity model (anonymous ID, session, user ID) and how it maps to destinations,
-- the consent modes,
+- consent: what it's asked for, by region, and how each event records it,
 - the wire format between the script and the collector,
 - what the collector adds on its own: enrichment, visits without JavaScript, and bot traffic.
 
@@ -37,13 +37,16 @@ be reported together with the base it comes from.
     warning,
   - `data-pv`: left empty in the page; a collector in front of the site fills in the page view ID it
     assigned (section 7). Empty means the script generates one,
-  - `data-page-<key>`: page attributes for the first page view (see Attributes, section 3).
+  - `data-page-<key>`: page attributes for the first page view (see Attributes, section 3),
+  - `data-consent`: `auto` when the site uses Tinybeam's consent banner; a collector in front of the site
+    replaces it with the visitor's consent state (section 5).
 - Neutral paths (`/tb/`) are recommended; names such as `analytics.js` are commonly blocked by filter lists.
 - Page API:
   - `tinybeam.track(name, props)` queues a custom event with its attributes,
   - `tinybeam.setPage(props)`, `tinybeam.setSession(props)`, `tinybeam.setUser(props)` set attributes for
     the whole page view, session or user, without sending an event (see Attributes, section 3),
   - `tinybeam.reset()` forgets the user and starts a new session, for sign-outs,
+  - `tinybeam.consent(true | false | { analytics, ads })` records the visitor's consent decision (section 5),
   - `tinybeam.flush()` sends the queue now.
 
 ## 3. Events
@@ -88,12 +91,12 @@ Four scopes, each with its own call:
   `setSession`, `setUser` and `reset` are sent at once, since later pages and destinations rely on them.
   To make sure an attribute arrives with an action, set it and then `track` the action.
 - Precedence when the same key is set at several scopes: event, then page, then session, then user.
-- User attributes need a stable identity across sessions: the site's user ID (`id`), or the consented
-  anonymous ID. Without either, a user is only recognized within one day (the anonymous ID's lifetime), and
-  reports say so.
+- User attributes need a stable identity across sessions: the site's user ID (`id`), or the stable
+  anonymous ID (consent `granted` or `not_required`, section 5). Without either, a user is only recognized
+  within one day (the daily hash's lifetime), and reports say so.
 - `reset()` (for sign-outs, on shared devices): sends `$reset`; the collector ends the session, so what
-  follows starts a new one without the previous session's attributes and without the user. In consented
-  mode it also gets a new anonymous ID. It deletes nothing already recorded. Page attributes stay, since
+  follows starts a new one without the previous session's attributes and without the user. With a stable
+  anonymous ID it also gets a new one. It deletes nothing already recorded. Page attributes stay, since
   the page is the same.
 - Destinations receive the resolved attributes (section 8).
 
@@ -160,12 +163,12 @@ script data."* Queries can filter on any of these states.
 
 | ID | Field | Lifetime | Who creates it |
 | --- | --- | --- | --- |
-| Anonymous ID | `aid` | Depends on consent mode (section 5) | Collector (cookie) or script |
-| Session ID | `sid` | Ends after 30 min without events | Collector |
+| Anonymous ID | `aid` | Depends on the consent state (section 5): 13 months, one day, or none | Collector |
+| Session ID | `sid` | Ends after 30 min without events; none when consent is `denied` | Collector |
 | User ID | `uid` | Set by the site with `tinybeam.setUser({ id })`; cleared by `reset()` | Site |
 | Page view ID | `pv` | One page view; ties `engagement`, `section_view` and `vitals` to their `page_view` | Script |
 
-- With consent, the anonymous ID is an `HttpOnly`, `Secure`, `SameSite=Lax` first-party cookie set by the
+- The stable anonymous ID is an `HttpOnly`, `Secure`, `SameSite=Lax` first-party cookie set by the
   collector, so it survives the 7-day cap that Safari applies to cookies and storage written by JavaScript.
 - `setUser({ id })` links the anonymous ID and session to the user ID in the collector. Earlier events stay
   attached to the anonymous ID; destinations that support it receive both.
@@ -179,16 +182,111 @@ script data."* Queries can filter on any of these states.
 | Meta Conversions API | `uid` (SHA-256) → `external_id`; `_fbp` / `_fbc` cookies or `fbclid` when present |
 | Microsoft Clarity, Hotjar | The page passes them the same user ID it gives `setUser`, through their own `identify` (the anonymous ID is computed by the collector, so the page doesn't know it) |
 
-## 5. Consent modes
+## 5. Consent
 
-| Mode | Storage | Anonymous ID | What you lose |
-| --- | --- | --- | --- |
-| `anonymous` (default) | None | Daily hash computed by the collector: `hash(daily salt, site, IP, user agent)`. The salt rotates every 24 h and is discarded; the IP is never stored | Returning visitors across days, cross-day attribution |
-| `consented` | First-party cookie set by the collector | Stable random ID | — |
+What needs consent is decided by what Tinybeam does, not only by where the visitor is. Counting visits
+without storing anything on the device and without forwarding them is first-party audience measurement;
+two things go further and are what consent is asked for:
 
-- The site switches modes with `tinybeam.consent(true | false)`; revoking deletes the cookie.
-- If the browser sends Global Privacy Control (`Sec-GPC: 1`), the collector stays in `anonymous` mode and
-  does not forward to advertising destinations, regardless of other settings.
+- `analytics`: a first-party cookie with a stable ID, to recognize a visitor on later days,
+- `ads`: forwarding events to advertising platforms (GA4, Meta, Google Ads…).
+
+> This section describes what Tinybeam can do, not legal advice. Rules differ by country and keep changing,
+> and the site owner is responsible for the settings they choose. A site run by a company established in
+> the EU, for example, generally has to ask every visitor, wherever they are (the "ask everyone" mode).
+
+### Identity by consent state
+
+The collector decides each event's consent state and records it in `consent` (for `analytics`) and
+`ads_consent`:
+
+| State | Means | Anonymous ID | Session | Forwarded to ad platforms |
+| --- | --- | --- | --- | --- |
+| `granted` | The visitor accepted | Stable random ID in a first-party cookie | Yes | Yes (`ads` granted) |
+| `not_required` | Region where the site measures fully by default | Stable random ID in a first-party cookie | Yes | Yes, until the visitor opts out |
+| `pending` | Region that requires consent, no decision yet | Daily hash, nothing stored on the device | Yes | No |
+| `denied` | The visitor refused | None | None | No |
+| `gpc` | The browser sent Global Privacy Control (`Sec-GPC: 1`) | As `denied` where consent is required; daily hash elsewhere | As the ID | No |
+
+- Daily hash: `hash(daily salt, site, IP, user agent)`. The salt rotates every 24 h and is discarded; the
+  IP is never stored. It recognizes a visitor within one day only.
+- `denied` events are counted without any identifier: page views, pages, sources and events, but not
+  visitors or sessions. A site can choose not to measure refusals at all instead (portal); then only the
+  refusal itself is recorded (below).
+- `ads_consent` takes the same values and only decides forwarding to advertising destinations (section 8).
+  Outside regions that require consent, `ads` is `not_required` until the visitor opts out, which is also
+  what US state laws (opt-out of "sale" or "sharing") expect; GPC is always honored as that opt-out.
+- When a visitor accepts mid-session, the session continues (it isn't counted twice) and the stable ID
+  applies from then on. Events recorded before the decision are not linked to the new ID.
+- Revoking deletes the cookie; what follows is `denied`.
+
+### Who decides the region
+
+The browser doesn't know the visitor's country; the collector does (section 7). Each site sets in the
+portal:
+
+- **Mode:** automatic by region (default), ask everyone, or never ask. "Never ask" means either anonymous
+  only (everyone `pending`, no banner) or full measurement everywhere (everyone `not_required`).
+- **Regions that require consent** in automatic mode: by default the EU and EEA, the United Kingdom and
+  Switzerland, editable country by country. An unknown country counts as requiring consent.
+- **On refusal:** count without an identifier (default) or don't measure.
+
+Country from the IP is approximate (VPNs, travelers); "ask everyone" avoids depending on it.
+
+### The decision record and the cookie
+
+- A decision is sent with `POST /tb/c` (`XMLHttpRequest`, not a beacon, so the response can set the cookie
+  reliably) and stored as a `kind: "set"` record named `$consent` with `{ analytics, ads, source }`
+  (`source`: `banner`, `api`). It carries no IP, and when the decision is a refusal, no ID either. These
+  records are the proof of consent that the GDPR asks a site to be able to show, and what counts refusals
+  when refusals aren't measured.
+- The decision is remembered in a first-party cookie, `tb_c` (`analytics` and `ads`, `HttpOnly`, `Secure`,
+  `SameSite=Lax`, 6 months), so the banner doesn't come back on every page. Remembering a refusal is
+  strictly necessary for it to be respected, so it needs no consent itself. With consent, the stable ID is
+  a second cookie, `tb_id` (13 months).
+- Cookies are set by the collector on the site's own domain. A collector on another domain is a third
+  party for the browser, and Safari and Firefox block its cookies; consent needs the collector under
+  the site's domain (a `/tb/` path or a subdomain).
+
+### Page API
+
+- `tinybeam.consent(true | false)` grants or refuses both purposes; `tinybeam.consent({ analytics, ads })`
+  sets them separately. For sites that already have a consent banner (a CMP): call it from the banner's
+  callback, and Tinybeam shows nothing of its own. Adapters that read common CMPs (Google Consent Mode,
+  IAB TCF) directly are a later module.
+- An element with `data-tb-consent` opens Tinybeam's banner again when clicked (a "Privacy settings" link),
+  since withdrawing must be as easy as giving consent.
+
+### Tinybeam's banner
+
+Optional, for sites without a CMP. It's a separate file, `/tb/banner.js`, loaded only for visitors who
+must see it, so the core stays within its budget (section 9).
+
+- The snippet carries `data-consent="auto"` when the site uses Tinybeam's banner. A collector in front of
+  the site replaces it with the resolved state (`pending`, `granted`, `denied`, `not_required`), as it does
+  with `data-pv`. Without one, the core asks `GET /tb/c?s=SITE_ID` (one small request, only on sites that
+  use the banner), which answers with the state.
+- If the state is `pending`, the core loads `/tb/banner.js?s=SITE_ID&l=LANG`; the collector serves it with
+  that site's texts in that language.
+- The banner asks only for what needs consent (returning-visitor cookie, advertising platforms), with
+  "Accept" and "Reject" equally prominent and a link to the site's privacy policy. Its text also says that
+  visits are counted anonymously and in aggregate either way, so "Reject" doesn't read as "don't count me".
+- Language (`LANG`): by default the page's language (`<html lang>`), then the visitor's browser language
+  (`navigator.language`), among the languages the site has texts for; otherwise the site's default
+  language. The owner can instead fix one language.
+- Texts: built-in translations for English, Spanish, Portuguese, French, German, Italian, Dutch and Polish.
+  In the portal the owner can edit each one, add languages, set the privacy policy link per language, and
+  choose the position and colors.
+
+### Reporting
+
+Dashboards show how many visitors and sessions are in each state, and every report can be filtered by
+consent state (for example, only visitors who accepted). Two caveats are shown with those numbers:
+
+- visitors who accepted are recognized across days and `pending` ones only within a day, so their counts
+  are shown apart rather than summed without explanation,
+- people who accept don't behave like everyone else, so a report on consented visitors only says what share
+  of the traffic it covers.
 
 ## 6. Wire format
 
@@ -270,13 +368,15 @@ The collector adds, per event:
   agent and User-Agent Client Hints when available,
 - `country`, `region`, `city` from the platform or headers; the IP itself is not stored,
 - `aid`, `sid` (section 4); bots get no session,
+- `consent` and `ads_consent` (section 5), from the decision cookie, the visitor's region, the site's
+  settings and Global Privacy Control,
 - on page views: `referrer_type` (`direct`, `internal`, `paid`, `email`, `ai_assistant`, `search`,
   `social`, `referral`), `referrer_host`, campaign parameters and the first click ID found
   (`click_id_type`, `click_id`),
 - `traffic` (`human` or `bot`) and, for bots, `bot_name`, `bot_category`, `bot_verified`.
 
 Computed when querying, not stored: `engaged_session` (more than 10 s of visible time, two page views, or a
-conversion event), `new_visitor` (`consented` mode).
+conversion event), `new_visitor` (stable anonymous ID only).
 
 ### Visits without JavaScript
 
@@ -360,22 +460,23 @@ Destinations are configured in the collector, never in the page:
       "type": "ga4",
       "measurementId": "G-XXXXXXX",
       "secretEnv": "GA4_API_SECRET",
-      "events": { "page_view": "page_view", "signup_click": "sign_up" },
-      "consent": "consented"
+      "events": { "page_view": "page_view", "signup_click": "sign_up" }
     },
     {
       "type": "meta_capi",
       "pixelId": "123",
       "tokenEnv": "META_CAPI_TOKEN",
-      "events": { "lead_submit": "Lead" },
-      "consent": "consented"
+      "events": { "lead_submit": "Lead" }
     }
   ]
 }
 ```
 
 - `events` maps Tinybeam event names to destination names; unmapped events are not sent.
-- `consent` sets the minimum consent mode for that destination.
+- Advertising destinations (GA4, Meta, Google Ads) only receive events whose `ads_consent` is `granted`
+  or `not_required` (section 5). GA4 events carry the matching consent signals (`ad_user_data`,
+  `ad_personalization`, Google's Consent Mode v2). Events without an anonymous ID can't go to destinations
+  that require one.
 - Bot traffic is never forwarded by default. A destination can opt in with `"bots": true` or a list of
   categories (for example `"bots": ["ai_user_fetch"]`); bot events then carry their category and
   `verified` flag.
@@ -415,6 +516,8 @@ collector resolves them for each forwarded event:
 | Core + all modules | 3 KB |
 
 - Bundles are minified: no whitespace or comments, local names shortened.
+- The consent banner (`/tb/banner.js`, section 5) is outside these budgets: it's loaded only for visitors
+  who must see it, never on every page view.
 - Old browsers are measured, not dropped. The source sticks to syntax that every browser since 2017 parses
   (ES2015: no optional chaining, nullish coalescing or class fields), which costs almost nothing in size,
   and the minifier never emits newer syntax. No polyfills are shipped: each browser API is feature-detected
@@ -434,8 +537,8 @@ collector resolves them for each forwarded event:
 Settled during review (2026-11-07):
 
 1. **Sessions** end after 30 min without events, GA4's default, so numbers are comparable. No midnight cut.
-2. **No per-tab ID in `anonymous` mode.** `sessionStorage` may count as device storage under ePrivacy, so
-   nothing is stored without consent.
+2. **No per-tab ID without consent.** `sessionStorage` may count as device storage under ePrivacy, so
+   nothing is stored without consent (except the cookie that remembers a refusal, section 5).
 3. **Storage** is any SQL database through a minimal driver (SQLite and D1 included), so the collector
    isn't tied to a provider. Superseded the earlier plan of Workers Analytics Engine + R2.
 4. **One file per site.** Modules are selected at build time and bundled into a single script, so the page
@@ -458,3 +561,10 @@ Settled during review (2026-11-07):
     `setSession`, `setUser`, plus `reset`. Page and session attributes apply to the whole page or session,
     including earlier events, and are resolved when querying. `setPage` waits for the next send; the
     others are sent at once. Replaced `set`, which only lasted for one page in the browser.
+14. **Consent by region, set per site.** By default, regions that require consent (EU/EEA, UK, Switzerland)
+    start anonymous and see a banner; elsewhere measurement is full by default with an opt-out, and Global
+    Privacy Control is always honored. Each site can ask everyone, never ask, or change the regions in the
+    portal. A refusal is counted without any identifier (or not at all), since measuring someone who
+    refused with an identifier, even a daily one, is the riskiest case under the GDPR. Every event records
+    its consent state, so dashboards count and filter by it. Tinybeam's own banner is optional, in a
+    separate file, with texts per language; sites with a CMP call `tinybeam.consent()` instead.

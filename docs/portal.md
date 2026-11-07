@@ -43,6 +43,18 @@ The equivalent of a GA4 property. Adding a site takes a name and its origins and
 snippet to paste (script tag and noscript pixel). A site can be paused (data rejected) or deleted (data
 removed after a grace period).
 
+## Consent
+
+Per site (spec, section 5):
+
+- mode: automatic by region (default), ask everyone, or never ask (anonymous only, or full everywhere),
+- the regions that require consent, country by country (default: EU/EEA, United Kingdom, Switzerland),
+- what a refusal means: counted without an identifier (default) or not measured,
+- the banner: Tinybeam's own or the site's existing one (a CMP calling `tinybeam.consent()`); for
+  Tinybeam's, the default language or "follow the page", texts per language (built-in translations,
+  editable, more languages can be added), the privacy policy link per language, position and colors, and
+  a preview.
+
 ## Filters
 
 Per site, decide what is not recorded at all:
@@ -73,7 +85,7 @@ Forward events to other platforms from the server, per site (spec, section 8):
 - map events (which Tinybeam events go, under which names) and properties,
 - choose the identifiers: which ID goes as GA4 `client_id` (Tinybeam's anonymous ID, or another one), what
   `user_id` is, and so on,
-- choose the minimum consent mode and whether bots go (off by default),
+- whether bots go (off by default); advertising destinations only receive events with advertising consent,
 - a delivery log with recent successes and failures, and a test button that sends one event.
 
 Platforms that only work as a script in the page (Microsoft Clarity, Hotjar) can't receive events from a
@@ -89,6 +101,7 @@ Per site, with a date range and filters on any dimension:
 - custom events and their properties: counts, breakdowns by any property,
 - sections seen and Web Vitals (once those modules exist), always with their base (spec, section 3),
 - visits without JavaScript,
+- consent: visitors and sessions per consent state, and every report filterable by it,
 - bots: by name, category and page, how often they come, special files (`robots.txt`, `llms.txt`),
 - AI: crawlers reading the site and visits referred by AI assistants.
 
@@ -97,6 +110,7 @@ Per site, with a date range and filters on any dimension:
 1. Configuration in the database and the collector reading it (done for sites; filters next).
 2. Accounts and the portal shell: sign-in, sites, snippet (done for the owner; roles and more users next).
 3. Dashboards over the stored events (first version done: date ranges; filters on any dimension next).
-4. Transformations.
-5. Destinations, starting with GA4 Measurement Protocol.
-6. Hosted mode: organizations and billing.
+4. Consent: states recorded per event, region settings, the optional banner.
+5. Transformations.
+6. Destinations, starting with GA4 Measurement Protocol.
+7. Hosted mode: organizations and billing.
