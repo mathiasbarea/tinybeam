@@ -145,8 +145,8 @@ Requires Node.js 22.5 or later (SQLite tests use `node:sqlite`).
 The browser script is `src/core.js`; modules will be build flags in `build.mjs` (code behind a flag that
 is off is dropped from that bundle). The collector is `collector/`: `index.js` (handling and records),
 `enrich.js` (user agent, referrer, campaign, geo), `bots.js` (the bot list), `storage.js`, and the
-platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index.js` (pages), `store.js`
-(users, sessions, sites in SQL) and `auth.js` (passwords, tokens). `app.js` puts the two together.
+platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index.js` (pages), `queries.js`
+(what the dashboards show), `store.js` (users, sessions, sites in SQL) and `auth.js` (passwords, tokens). `app.js` puts the two together.
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
@@ -158,7 +158,8 @@ platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index
 2. Browser core (done) and modules (sections, Web Vitals), with a size budget in CI.
 3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent mode.
 4. The portal, on a URL the owner chooses, with no terminal needed ([`docs/portal.md`](docs/portal.md)):
-   owner account and sites (done); roles, filters, dashboards, transformations and destinations next.
+   owner account, sites and first dashboards (done); roles, filters, transformations and destinations
+   next.
 5. First destinations: GA4 Measurement Protocol and Meta Conversions API.
 6. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).
 7. A hosted service running the same portal and collector, for sites that don't want to run one.

@@ -2,6 +2,7 @@
 // the portal, sharing one SQL database. Sites added in the portal are the sites the collector accepts.
 import { createCollector, sqlStorage } from './collector/index.js';
 import { createPortal } from './portal/index.js';
+import { createQueries } from './portal/queries.js';
 import { createStore } from './portal/store.js';
 
 export function createTinybeam({ driver, script = null, collectorPath = '/tb', portalPath = '/portal', secureCookies = true, ...collectorOptions }) {
@@ -13,7 +14,7 @@ export function createTinybeam({ driver, script = null, collectorPath = '/tb', p
     script,
     ...collectorOptions,
   });
-  const portal = createPortal({ store, basePath: portalPath, collectorPath, secureCookies });
+  const portal = createPortal({ store, queries: createQueries(driver), basePath: portalPath, collectorPath, secureCookies });
 
   return {
     collector,

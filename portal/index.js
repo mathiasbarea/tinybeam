@@ -21,6 +21,14 @@ button.link{background:none;color:inherit;padding:0;margin:0;text-decoration:und
 pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 .error{color:var(--danger)}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 4px;border-bottom:1px solid var(--line)}
 .tag{font-size:12px;padding:1px 6px;border-radius:4px;border:1px solid var(--line)}
+main.wide{max-width:1100px}nav.tabs{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 16px;border-bottom:1px solid var(--line)}
+nav.tabs a{padding:6px 0;color:var(--muted);text-decoration:none}nav.tabs a.on{color:var(--fg);border-bottom:2px solid var(--accent)}
+.ranges a{margin-right:10px}.ranges a.on{font-weight:700;color:var(--fg)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+.stat b{display:block;font-size:24px}.stat span{color:var(--muted);font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:12px}.grid .card{margin:0;min-width:0}.card h3{margin:0 0 8px;font-size:15px}
+.bar{table-layout:fixed}.bar td{border:0;padding:3px 0;overflow-wrap:anywhere}.bar td:last-child{text-align:right;color:var(--muted);width:90px}.bar .fill{height:4px;background:var(--accent);border-radius:2px;margin-top:2px;opacity:.7}
+.note{font-size:13px;color:var(--muted)}a{color:var(--accent)}
 `;
 
 // Origins from a textarea, one per line: "https://example.com", no path. Returns [origins, error].
@@ -35,16 +43,20 @@ export function parseOrigins(text) {
   return origins.length ? [origins, null] : [null, 'Add at least one origin'];
 }
 
-export function createPortal({ store, basePath = '/portal', collectorPath = '/tb', secureCookies = true }) {
+const RANGES = { '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5, '90d': 90 * 864e5 };
+const number = n => (n == null ? '–' : Number(n).toLocaleString('en-US'));
+const duration = ms => (ms == null ? '–' : ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`);
+
+export function createPortal({ store, queries, basePath = '/portal', collectorPath = '/tb', secureCookies = true, now = Date.now }) {
   const COOKIE = 'tb_session';
   const url = path => basePath + path;
   const failures = new Map(); // email -> { count, until }: slows down password guessing
 
-  const page = (title, body, user, status = 200, headers = {}) => new Response(html`<!doctype html>
+  const page = (title, body, user, status = 200, headers = {}, wide = false) => new Response(html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · Tinybeam</title><style>${raw(CSS)}</style></head><body>
 <header><a href="${url('/')}">Tinybeam</a>${raw(user ? html`<form method="post" action="${url('/logout')}"><span class="muted">${user.email}</span> &nbsp;<button class="link">Sign out</button></form>` : '')}</header>
-<main>${raw(body)}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', ...headers } });
+<main class="${wide ? 'wide' : ''}">${raw(body)}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', ...headers } });
 
   const redirect = (path, headers = {}) => new Response(null, { status: 303, headers: { Location: url(path), ...headers } });
   const cookie = (value, maxAge) => `${COOKIE}=${value}; Path=${basePath}; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookies ? '; Secure' : ''}`;
@@ -91,8 +103,25 @@ ${raw(site.id ? html`<label><input type="checkbox" name="paused" value="1" style
 <pre>${direct}</pre>`;
   };
 
+  const empty = '<p class="note">Nothing yet.</p>';
+  const stat = (value, label, title) => html`<div class="stat" title="${title || ''}"><b>${value}</b><span>${label}</span></div>`;
+  const card = (title, body) => `<div class="card"><h3>${title}</h3>${body}</div>`;
+  // A list as labelled bars, scaled to the largest value; with `total`, also as a share of it.
+  const bars = (list, total) => {
+    if (!list.length || list.every(r => !r.value)) return empty;
+    const max = total || Math.max(...list.map(r => r.value));
+    return html`<table class="bar">${raw(list.map(r => html`<tr><td>${r.key}<div class="fill" style="width:${Math.max(1, Math.round(r.value / max * 100))}%"></div></td><td>${number(r.value)}${raw(total ? ` <span class="note">${Math.round(r.value / total * 100)}%</span>` : '')}</td></tr>`).join(''))}</table>`;
+  };
+  const partial = truncated => (truncated ? '<p class="note">These numbers cover only the first rows of the period; choose a shorter range for complete results.</p>' : '');
+  const siteHeader = (site, tab, rangeKey = '7d') => {
+    const base = `/sites/${site.id}`;
+    const tabs = [['overview', base, 'Overview'], ['bots', `${base}/bots`, 'Bots & AI'], ['settings', `${base}/settings`, 'Install & settings']];
+    return html`<h1>${site.name} ${raw(site.paused ? '<span class="tag">paused</span>' : '')}</h1>
+<nav class="tabs">${raw(tabs.map(([key, href, label]) => html`<a class="${key === tab ? 'on' : ''}" href="${url(href)}${key === 'settings' ? '' : `?range=${rangeKey}`}">${label}</a>`).join(''))}</nav>`;
+  };
+
   async function routes(request) {
-    const { pathname, origin } = new URL(request.url);
+    const { pathname, origin, searchParams } = new URL(request.url);
     const path = pathname.slice(basePath.length) || '/';
     const post = request.method === 'POST';
     if (post && !sameOrigin(request)) return new Response('Forbidden', { status: 403 });
@@ -155,36 +184,108 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
       const [origins, error] = parseOrigins(fields.origins);
       if (!name || error) return page('Add a site', html`<h1>Add a site</h1>${raw(siteForm('/sites/new', { name, origins: String(fields.origins || '').split(/\s+/) }, error || 'Add a name'))}`, user, 400);
       const site = await store.createSite({ name, origins });
-      return redirect('/sites/' + site.id);
+      return redirect(`/sites/${site.id}/settings`);
     }
 
-    const match = path.match(/^\/sites\/([a-z0-9]+)(\/delete)?$/);
+    const match = path.match(/^\/sites\/([a-z0-9]+)(?:\/(settings|delete|bots|events\/([\w.:-]+)))?$/);
     if (match) {
       const site = await store.getSite(match[1]);
       if (!site) return page('Not found', '<h1>Site not found</h1>', user, 404);
-      if (match[2]) {
-        if (!post) return page('Delete site', '<h1>Not found</h1>', user, 404);
+      const [, , section, eventName] = match;
+      const base = `/sites/${site.id}`;
+
+      if (section === 'delete') {
+        if (!post) return page('Not found', '<h1>Page not found</h1>', user, 404);
         const fields = await form(request);
-        if (fields.confirm !== site.name) return redirect('/sites/' + site.id);
+        if (fields.confirm !== site.name) return redirect(`${base}/settings`);
         await store.deleteSite(site.id);
         return redirect('/');
       }
-      if (post) {
-        const fields = await form(request);
-        const name = String(fields.name || '').trim().slice(0, 100);
-        const [origins, error] = parseOrigins(fields.origins);
-        if (!name || error) return page(site.name, html`<h1>${site.name}</h1>${raw(siteForm('/sites/' + site.id, { ...site, name }, error || 'Add a name'))}`, user, 400);
-        await store.updateSite(site.id, { name, origins, paused: fields.paused === '1' });
-        return redirect('/sites/' + site.id);
-      }
-      return page(site.name, html`<h1>${site.name} ${raw(site.paused ? '<span class="tag">paused</span>' : '')}</h1>
+      if (section === 'settings') {
+        if (post) {
+          const fields = await form(request);
+          const name = String(fields.name || '').trim().slice(0, 100);
+          const [origins, error] = parseOrigins(fields.origins);
+          if (!name || error) return page(site.name, html`<h1>${site.name}</h1>${raw(siteForm(`${base}/settings`, { ...site, name }, error || 'Add a name'))}`, user, 400);
+          await store.updateSite(site.id, { name, origins, paused: fields.paused === '1' });
+          return redirect(`${base}/settings`);
+        }
+        return page(site.name, html`${raw(siteHeader(site, 'settings'))}
 <p class="muted">Site ID <code>${site.id}</code></p>
 ${raw(snippet(site, origin))}
-<h2>Settings</h2>${raw(siteForm('/sites/' + site.id, site))}
+<h2>Settings</h2>${raw(siteForm(`${base}/settings`, site))}
 <h2>Delete</h2>
-<form method="post" action="${url('/sites/' + site.id + '/delete')}" class="card">
+<form method="post" action="${url(`${base}/delete`)}" class="card">
 <p>Deletes the site and <strong>every event recorded for it</strong>. This can't be undone. Type the site's name to confirm.</p>
-<input name="confirm" required aria-label="Site name" placeholder="${site.name}"><button class="danger">Delete site and data</button></form>`, user);
+<input name="confirm" required aria-label="Site name" placeholder="${site.name}"><button class="danger">Delete site and data</button></form>`, user, 200, {}, true);
+      }
+      if (post) return new Response('Method Not Allowed', { status: 405 });
+
+      const rangeKey = RANGES[searchParams.get('range')] ? searchParams.get('range') : '7d';
+      const to = now();
+      const from = to - RANGES[rangeKey];
+      const ranges = html`<p class="ranges">${raw(Object.keys(RANGES).map(k => html`<a class="${k === rangeKey ? 'on' : ''}" href="${url(path)}?range=${k}">${k}</a>`).join(''))}</p>`;
+
+      if (section === 'bots') {
+        const data = await queries.bots(site.id, from, to);
+        const botList = data.bots.length
+          ? html`<table class="bar">${raw(data.bots.map(b => html`<tr><td>${b.key} <span class="tag">${b.category}</span><br><span class="note">last seen ${new Date(b.last).toISOString().slice(0, 16).replace('T', ' ')} UTC</span></td><td>${number(b.value)}</td></tr>`).join(''))}</table>`
+          : empty;
+        return page(`${site.name} · Bots & AI`, html`${raw(siteHeader(site, 'bots', rangeKey))}${raw(ranges)}
+<div class="stats">${raw(stat(number(data.total), 'bot requests'))}${raw(stat(number(data.verified.verified || 0), 'from verified bots'))}${raw(stat(number(data.aiReferrals.reduce((a, r) => a + r.value, 0)), 'visits referred by AI assistants'))}</div>
+<div class="grid" style="margin-top:12px">
+${raw(card('By category', bars(data.categories)))}
+${raw(card('Bots', botList))}
+${raw(card('Most requested paths', bars(data.paths)))}
+${raw(card('Special files', bars(data.specialFiles)))}
+${raw(card('Visits referred by AI assistants', bars(data.aiReferrals)))}
+</div>
+<p class="note">Bots are seen when a collector is in front of the site (every request) or when they run the script. Verified means the platform confirmed the bot's identity; the others are identified by user agent only. Special files are robots.txt, sitemaps, llms.txt and Markdown versions of pages.</p>`, user, 200, {}, true);
+      }
+
+      if (eventName) {
+        const data = await queries.event(site.id, eventName, from, to);
+        const props = data.properties.map(p => card(html`${p.key} <span class="tag">${p.scope}</span>`, bars(p.values, data.total))).join('');
+        return page(`${site.name} · ${eventName}`, html`${raw(siteHeader(site, 'overview', rangeKey))}
+<h2>Event: ${eventName}</h2>${raw(ranges)}
+<div class="stats">${raw(stat(number(data.total), 'events'))}</div>
+<p class="note">Each attribute shows the scope it comes from. Page, session and user attributes apply to every event of that page view, session or user, including events sent before they were set.</p>
+<div class="grid">${raw(props || card('Attributes', empty))}</div>${raw(partial(data.truncated))}`, user, 200, {}, true);
+      }
+
+      const [data, attrs] = await Promise.all([queries.overview(site.id, from, to), queries.attributeSummary(site.id, from, to)]);
+      const t = data.totals;
+      const eventList = data.events.length
+        ? html`<table class="bar">${raw(data.events.map(e => html`<tr><td><a href="${url(`${base}/events/${e.key}`)}?range=${rangeKey}">${e.key}</a></td><td>${number(e.value)}</td></tr>`).join(''))}</table>`
+        : empty;
+      const scopeCards = ['page', 'session', 'user'].map(scope => card(`${scope[0].toUpperCase()}${scope.slice(1)} attributes`,
+        attrs[scope].length ? attrs[scope].map(a => html`<p style="margin:8px 0 2px"><strong>${a.key}</strong></p>${raw(bars(a.values))}`).join('') : empty)).join('');
+      const jsLabels = { on: 'Script ran', off: 'Disabled (noscript pixel)', unknown: 'No script data (server only)' };
+      const jsTotal = data.js.reduce((a, r) => a + r.value, 0);
+      return page(site.name, html`${raw(siteHeader(site, 'overview', rangeKey))}${raw(ranges)}
+<div class="stats">
+${raw(stat(number(t.visitors), 'visitors', 'Daily unique visitors, summed: without consent the anonymous ID changes every day.'))}
+${raw(stat(number(t.sessions), 'sessions'))}
+${raw(stat(number(t.pageViews), 'page views'))}
+${raw(stat(duration(t.avgVisibleMs), 'visible time per page view', `Over ${number(t.timedPageViews)} page views with engagement data.`))}
+${raw(stat(number(t.bots), 'bot requests', 'Not included in any other number here.'))}
+</div>
+<div class="grid" style="margin-top:12px">
+${raw(card('Pages', bars(data.pages)))}
+${raw(card('Sources (sessions)', bars(data.referrerTypes)))}
+${raw(card('Referrers (sessions)', bars(data.referrers)))}
+${raw(card('Campaigns (sessions)', bars(data.campaigns)))}
+${raw(card('Events', eventList))}
+${raw(card('Scroll depth', bars(data.scrollDepth, data.scrolledPageViews) + html`<p class="note">Deepest point reached, over ${number(data.scrolledPageViews)} page views with engagement data.</p>`))}
+${raw(card('Countries', bars(data.countries)))}
+${raw(card('Devices', bars(data.devices)))}
+${raw(card('Browsers', bars(data.browsers)))}
+${raw(card('Operating systems', bars(data.os)))}
+${raw(card('JavaScript', bars(data.js.map(r => ({ key: jsLabels[r.key] || r.key, value: r.value })), jsTotal)))}
+</div>
+<h2>Attributes</h2>
+<p class="note">Current values: how many page views, sessions or users have each one.</p>
+<div class="grid">${raw(scopeCards)}</div>${raw(partial(data.truncated || attrs.truncated))}`, user, 200, {}, true);
     }
 
     return page('Not found', '<h1>Page not found</h1>', user, 404);
@@ -192,6 +293,7 @@ ${raw(snippet(site, origin))}
 
   return {
     handle: request => routes(request),
+    queries,
     basePath,
   };
 }

@@ -38,7 +38,7 @@ async function signedIn() {
 async function addSite(request, name = 'Example', origins = 'https://example.com') {
   const res = await request('/portal/sites/new', { form: { name, origins } });
   assert.equal(res.status, 303);
-  return res.headers.get('location').split('/').pop();
+  return res.headers.get('location').match(/sites\/([a-z0-9]+)/)[1];
 }
 
 test('passwords are hashed with a salt and verified', async () => {
@@ -83,7 +83,7 @@ test('a site added in the portal gets an ID and a snippet, and the collector acc
   const { app, driver, request, text } = await signedIn();
   const id = await addSite(request, 'Example <b>', 'https://example.com/some/page\nhttps://www.example.com');
   assert.match(id, /^[a-z0-9]{12}$/);
-  const page = await text(await request('/portal/sites/' + id));
+  const page = await text(await request(`/portal/sites/${id}/settings`));
   assert.match(page, new RegExp(`data-site=&quot;${id}&quot;`));
   assert.match(page, /Example &lt;b&gt;/, 'names are escaped');
   assert.doesNotMatch(page, /Example <b>/);
@@ -104,7 +104,7 @@ test('a paused site is rejected by the collector; deleting needs the name and re
   const id = await addSite(request);
   const send = () => app.handle(new Request(ORIGIN + '/tb/e', { method: 'POST', body: JSON.stringify({ v: 1, s: id, u: 'https://example.com/', e: [{ n: 'x', t: 1, p: {} }] }) }));
   assert.equal((await send()).status, 204);
-  await request('/portal/sites/' + id, { form: { name: 'Example', origins: 'https://example.com', paused: '1' } });
+  await request(`/portal/sites/${id}/settings`, { form: { name: 'Example', origins: 'https://example.com', paused: '1' } });
   assert.equal((await app.store.getSite(id)).paused, true);
   assert.equal((await send()).status, 403);
 
