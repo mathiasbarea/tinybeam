@@ -52,7 +52,7 @@ Tinybeam takes the opposite approach:
 | Page views | URL, title, referrer, language, viewport and screen, time zone, UTM and click IDs | Browser (core) |
 | Engagement | Visible time on page, scroll depth (25/50/75/100%) | Browser (core) |
 | Links | Outbound clicks, file downloads, site search | Browser (core) |
-| Custom events | `tinybeam.track(name, props)`, `data-tb-event` attributes, and `tinybeam.set(props)` for properties on every event | Browser (core) |
+| Custom events and attributes | `tinybeam.track(name, props)` and `data-tb-event` attributes; page, session and user attributes with `setPage`, `setSession`, `setUser` (applied to the whole page, session or user) and `reset` | Browser (core) + collector |
 | Sections | Which marked sections and components were seen, and for how long | Browser (module) |
 | Web Vitals | LCP, INP, CLS, TTFB from real visitors | Browser (module) |
 | Context | Device, browser, OS, country, region | Collector |
@@ -126,6 +126,7 @@ Adapters fill it in; without one, country is read from common CDN headers.
 | `data-site` | **Required.** The site's ID. Every site has one, self-hosted or hosted; without it the script doesn't measure. |
 | `data-endpoint` | Where to send events. Default `/tb/e` on the same site; can be a full URL to a collector elsewhere. |
 | `data-pv` | Left empty; a collector in front of the site fills in the page view ID. |
+| `data-page-<key>` | Page attributes, for sites that know them when rendering the page (`data-page-page_type="article"`). |
 
 The `<noscript>` pixel is optional: it counts visitors with JavaScript disabled.
 
@@ -149,7 +150,7 @@ platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
-| `tinybeam.js` | Core, including History API navigations | 1,173 B | 1,536 B |
+| `tinybeam.js` | Core, including History API navigations | 1,214 B | 1,536 B |
 
 ## Roadmap
 

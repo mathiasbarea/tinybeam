@@ -36,12 +36,14 @@ be reported together with the base it comes from.
   - `data-site`: **required**, the site's ID (sent as `s`). Without it the script doesn't measure and logs a
     warning,
   - `data-pv`: left empty in the page; a collector in front of the site fills in the page view ID it
-    assigned (section 7). Empty means the script generates one.
+    assigned (section 7). Empty means the script generates one,
+  - `data-page-<key>`: page attributes for the first page view (see Attributes, section 3).
 - Neutral paths (`/tb/`) are recommended; names such as `analytics.js` are commonly blocked by filter lists.
 - Page API:
-  - `tinybeam.track(name, props)` queues a custom event,
-  - `tinybeam.set(props)` adds properties to every later event (login state, plan, A/B variant); an event's
-    own properties win, and `null` removes a property,
+  - `tinybeam.track(name, props)` queues a custom event with its attributes,
+  - `tinybeam.setPage(props)`, `tinybeam.setSession(props)`, `tinybeam.setUser(props)` set attributes for
+    the whole page view, session or user, without sending an event (see Attributes, section 3),
+  - `tinybeam.reset()` forgets the user and starts a new session, for sign-outs,
   - `tinybeam.flush()` sends the queue now.
 
 ## 3. Events
@@ -64,6 +66,38 @@ attributes become its properties. Clicks are sent right away, since they may lea
 Properties, on any event: a flat object of strings, finite numbers and booleans; keys of letters, digits
 and underscores, up to 40 characters; up to 25 per event; strings cut at 500 characters. The collector drops
 anything else (nested objects, arrays, `null`), so a page can't fill the database with arbitrary data.
+
+### Attributes
+
+Four scopes, each with its own call:
+
+| Scope | Call | Applies to | Example |
+| --- | --- | --- | --- |
+| Event | `track(name, props)` | That event | `video_play` with `percent: 50` |
+| Page | `setPage(props)`, or `data-page-<key>` on the script tag | **Every** event of that page view, including those sent before the call | `page_type`, `author`, `logged_in` |
+| Session | `setSession(props)` | **Every** event of that session, including those sent before the call | `experiment`, `promo` |
+| User | `setUser(props)`; `id` is the site's user ID | Every event of that user, across sessions | `plan`, `customer_type` |
+
+- `null` removes an attribute. The same limits as event properties apply.
+- The calls don't send an event. They queue a record (`$page`, `$session`, `$user`) that the collector stores
+  as `kind: "set"`, tied to its page view (`pv`), session (`sid`) or user (`uid`). Values are applied when
+  querying, so a page or session attribute also covers events sent before it was set. Within a scope the
+  latest value of each key wins.
+- Sending: `setPage` waits for the next send (a click, navigation, hiding the page, 20 queued events, or
+  `flush()`), since it only matters for that page and is lost only if the page's other events are too.
+  `setSession`, `setUser` and `reset` are sent at once, since later pages and destinations rely on them.
+  To make sure an attribute arrives with an action, set it and then `track` the action.
+- Precedence when the same key is set at several scopes: event, then page, then session, then user.
+- User attributes need a stable identity across sessions: the site's user ID (`id`), or the consented
+  anonymous ID. Without either, a user is only recognized within one day (the anonymous ID's lifetime), and
+  reports say so.
+- `reset()` (for sign-outs, on shared devices): sends `$reset`; the collector ends the session, so what
+  follows starts a new one without the previous session's attributes and without the user. In consented
+  mode it also gets a new anonymous ID. It deletes nothing already recorded. Page attributes stay, since
+  the page is the same.
+- Destinations receive the resolved attributes. Since a later attribute can change a page's earlier
+  events, forwarding a page's events can wait until the page is over (the default) or go out at once and
+  only carry what was known then; this is set per destination.
 
 Derived by the collector from the page URL `u` and the event URLs, so the script doesn't carry that code:
 
@@ -130,13 +164,13 @@ script data."* Queries can filter on any of these states.
 | --- | --- | --- | --- |
 | Anonymous ID | `aid` | Depends on consent mode (section 5) | Collector (cookie) or script |
 | Session ID | `sid` | Ends after 30 min without events | Collector |
-| User ID | `uid` | Set by the site with `tinybeam.identify(userId, traits)` | Site |
+| User ID | `uid` | Set by the site with `tinybeam.setUser({ id })`; cleared by `reset()` | Site |
 | Page view ID | `pv` | One page view; ties `engagement`, `section_view` and `vitals` to their `page_view` | Script |
 
 - With consent, the anonymous ID is an `HttpOnly`, `Secure`, `SameSite=Lax` first-party cookie set by the
   collector, so it survives the 7-day cap that Safari applies to cookies and storage written by JavaScript.
-- `identify` links the anonymous ID to the user ID in the collector. Earlier events stay attached to the
-  anonymous ID; destinations that support it receive both.
+- `setUser({ id })` links the anonymous ID and session to the user ID in the collector. Earlier events stay
+  attached to the anonymous ID; destinations that support it receive both.
 - Format: 128-bit random values as URL-safe text (the script uses base 36), no embedded meaning.
 
 ### Mapping to destinations
@@ -145,7 +179,7 @@ script data."* Queries can filter on any of these states.
 | --- | --- |
 | GA4 Measurement Protocol | `aid` → `client_id`, `uid` → `user_id`, `sid` → `session_id`, `engagement.ms` → `engagement_time_msec` |
 | Meta Conversions API | `uid` (SHA-256) → `external_id`; `_fbp` / `_fbc` cookies or `fbclid` when present |
-| Microsoft Clarity, Hotjar | `tinybeam.id()` exposes `aid` to the page so it can be passed to their own `identify` |
+| Microsoft Clarity, Hotjar | The page passes them the same user ID it gives `setUser`, through their own `identify` (the anonymous ID is computed by the collector, so the page doesn't know it) |
 
 ## 5. Consent modes
 
@@ -397,3 +431,7 @@ Settled during review (2026-11-07):
 11. **The collector runs anywhere** (web-standard APIs, platform adapters), and the script can send to a
     collector on another domain, so the same code serves self-hosting and a hosted service.
 12. **The site ID is always required**, self-hosted or hosted, with one site or many.
+13. **Four attribute scopes** (event, page, session, user) with one call each: `track`, `setPage`,
+    `setSession`, `setUser`, plus `reset`. Page and session attributes apply to the whole page or session,
+    including earlier events, and are resolved when querying. `setPage` waits for the next send; the
+    others are sent at once. Replaced `set`, which only lasted for one page in the browser.

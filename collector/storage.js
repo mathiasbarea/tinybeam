@@ -5,13 +5,14 @@ export const COLUMNS = {
   received_at: 'INTEGER', // ms since epoch, collector clock
   client_time: 'INTEGER', // ms since epoch, browser clock
   site: 'TEXT',
-  kind: 'TEXT', // event | bot
+  kind: 'TEXT', // event | set (page, session and user attributes) | bot
   source: 'TEXT', // script | server | noscript
   js: 'TEXT', // on | off | unknown
   name: 'TEXT',
   pv: 'TEXT',
   aid: 'TEXT',
   sid: 'TEXT',
+  uid: 'TEXT', // the site's user ID, on $user records (setUser)
   url: 'TEXT',
   host: 'TEXT',
   path: 'TEXT',

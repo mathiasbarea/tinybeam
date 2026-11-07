@@ -103,6 +103,30 @@ test('stores only flat, valid properties, and keeps site properties on page view
   assert.equal(Object.keys(crowded.props).length, 25);
 });
 
+test('stores page, session and user attributes as set records; reset starts a new session', async () => {
+  const { collector, records } = setup();
+  await collector.handle(post(batch([
+    { n: 'engagement', t: 1, p: { ms: 5, scroll: 0 } },
+    { n: '$page', t: 2, p: { page_type: 'article', bad: { x: 1 } } },
+    { n: '$session', t: 3, p: { experiment: 'b', old: null } },
+    { n: '$user', t: 4, p: { id: 'u_1', plan: 'pro' } },
+    { n: '$reset', t: 5, p: { ignored: 1 } },
+    { n: 'after_reset', t: 6, p: {} },
+    { n: '$unknown', t: 7, p: {} },
+  ])), { ip: '203.0.113.9' });
+  assert.deepEqual(records.map(r => [r.kind, r.name, r.props, r.uid ?? null]), [
+    ['event', 'engagement', { ms: 5, scroll: 0 }, null],
+    ['set', '$page', { page_type: 'article' }, null],
+    ['set', '$session', { experiment: 'b', old: null }, null],
+    ['set', '$user', { plan: 'pro' }, 'u_1'],
+    ['set', '$reset', {}, null],
+    ['event', 'after_reset', {}, null],
+  ]);
+  assert.equal(records[1].pv, 'pv1');
+  assert.equal(records[3].sid, records[0].sid);
+  assert.notEqual(records[5].sid, records[0].sid, 'new session after reset');
+});
+
 test('rejects malformed, oversized and wrong-method requests', async () => {
   const { collector, records } = setup();
   assert.equal((await collector.handle(post('not json'))).status, 400);

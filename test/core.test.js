@@ -152,14 +152,26 @@ test('tinybeam.track queues custom events and flushes them in batches of 20', as
   assert.equal(sent[2].e.length, 20);
 });
 
-test('tinybeam.set adds properties to every later event, and null removes them', async () => {
+test('setPage waits for the next send; setSession, setUser and reset send at once', async () => {
   const { window, sent } = await load();
-  window.tinybeam.set({ plan: 'pro', variant: 'b' });
-  window.tinybeam.track('a', { variant: 'c' });
-  window.tinybeam.set({ variant: null });
-  window.tinybeam.track('b');
-  window.tinybeam.flush();
-  assert.deepEqual(sent[1].e.map(e => [e.n, e.p]), [['a', { plan: 'pro', variant: 'c' }], ['b', { plan: 'pro' }]]);
+  window.tinybeam.setPage({ page_type: 'article' });
+  assert.equal(sent.length, 1, 'page attributes wait');
+  window.tinybeam.track('a', { x: 1 });
+  window.tinybeam.setSession({ experiment: 'pricing-b' });
+  assert.deepEqual(sent[1].e.map(e => [e.n, e.p]), [['$page', { page_type: 'article' }], ['a', { x: 1 }], ['$session', { experiment: 'pricing-b' }]]);
+  window.tinybeam.setUser({ id: 'u_1', plan: null });
+  assert.deepEqual(sent[2].e.map(e => [e.n, e.p]), [['$user', { id: 'u_1', plan: null }]]);
+  window.tinybeam.reset();
+  assert.deepEqual(sent[3].e.map(e => e.n), ['$reset']);
+  assert.equal(sent[3].pv, sent[0].pv, 'attributes are tied to the page view they were set on');
+});
+
+test('page attributes on the script tag go with the first page view', async () => {
+  const { window, sent, clock } = await load({ attrs: { 'data-site': 'site1', 'data-page-page_type': 'article', 'data-page-author': 'mathias' } });
+  assert.deepEqual(sent[0].e.map(e => [e.n, e.p]), [['page_view', { title: 'Pricing', ref: 'https://chatgpt.com/' }], ['$page', { page_type: 'article', author: 'mathias' }]]);
+  clock.now += 1000;
+  window.history.pushState({}, '', '/next/');
+  assert.equal(events(sent).filter(e => e.n === '$page').length, 1, 'not repeated on later page views');
 });
 
 test('falls back to XMLHttpRequest without sendBeacon and says so', async () => {

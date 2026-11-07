@@ -32,8 +32,8 @@ export function dailySalt() {
   };
 }
 
-// Sessions kept in memory: a session ends after `timeout` without events. Several instances need a
-// shared store with the same `touch(key, now)` method.
+// Sessions kept in memory: a session ends after `timeout` without events, or on end() (tinybeam.reset).
+// Several instances need a shared store with the same `touch(key, now)` and `end(key)` methods.
 export function memorySessions(timeout) {
   const sessions = new Map();
   return {
@@ -44,6 +44,9 @@ export function memorySessions(timeout) {
       sessions.set(key, session);
       if (sessions.size > 50_000) for (const [k, s] of sessions) if (now - s.last > timeout) sessions.delete(k);
       return session.sid;
+    },
+    end(key) {
+      sessions.delete(key);
     },
   };
 }
@@ -63,19 +66,22 @@ const specialFile = path =>
 // Event properties as stored: a flat object of strings, finite numbers and booleans, with keys of letters,
 // digits and underscores. Anything else is dropped, and long strings are cut, so a page can't fill the
 // database with arbitrary data.
-export function cleanProps(props, max) {
+export function cleanProps(props, max, { allowNull = false } = {}) {
   const out = {};
   if (!props || typeof props !== 'object' || Array.isArray(props)) return out;
   let count = 0;
   for (const [key, value] of Object.entries(props)) {
     if (count >= max || !/^[A-Za-z_]\w{0,39}$/.test(key)) continue;
-    if (typeof value === 'string') out[key] = value.slice(0, 500);
+    if (value === null && allowNull) out[key] = null;
+    else if (typeof value === 'string') out[key] = value.slice(0, 500);
     else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) out[key] = value;
     else continue;
     count++;
   }
   return out;
 }
+
+const SETTERS = ['$page', '$session', '$user', '$reset'];
 
 const httpUrl = value => {
   try {
@@ -195,7 +201,26 @@ export function createCollector(options = {}) {
 
     const records = [];
     for (const event of body.e) {
-      if (!event || typeof event.n !== 'string' || !/^[\w.:-]{1,64}$/.test(event.n)) continue;
+      if (!event || typeof event.n !== 'string') continue;
+      // $page, $session, $user and $reset come from setPage / setSession / setUser / reset; they are
+      // stored as kind "set" and applied to the whole page view, session or user when querying.
+      if (SETTERS.includes(event.n)) {
+        const raw = event.p && typeof event.p === 'object' ? event.p : {};
+        const props = cleanProps(raw, config.maxProps, { allowNull: true });
+        let uid = null;
+        if (event.n === '$user' && 'id' in props) {
+          uid = typeof props.id === 'string' || typeof props.id === 'number' ? String(props.id).slice(0, 200) : null;
+          delete props.id;
+        }
+        records.push({ ...shared, kind: 'set', name: event.n, client_time: Number.isFinite(event.t) ? event.t : null, uid, props: event.n === '$reset' ? {} : props });
+        // A reset starts a new session for what follows, in this batch and later ones.
+        if (event.n === '$reset' && shared.sid) {
+          sessions.end(`${site}|${shared.aid}`);
+          shared.sid = sessions.touch(`${site}|${shared.aid}`, shared.received_at);
+        }
+        continue;
+      }
+      if (!/^[\w.:-]{1,64}$/.test(event.n)) continue;
       const raw = event.p && typeof event.p === 'object' ? event.p : {};
       const base = { ...shared, name: event.n, client_time: Number.isFinite(event.t) ? event.t : null };
       if (event.n === 'page_view') {

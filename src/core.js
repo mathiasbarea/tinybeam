@@ -42,12 +42,28 @@
     }
     queue = [];
   };
-  // Properties set with tinybeam.set() go with every event; an event's own properties win.
-  const globals = {};
   const push = (name, props) => {
-    queue.push({ n: name, t: Date.now(), p: Object.assign({}, globals, props) });
+    queue.push({ n: name, t: Date.now(), p: props || {} });
     if (queue.length > 19) flush();
   };
+  // Page, session and user attributes go to the collector as $page / $session / $user records, which it
+  // applies to the whole page view, session or user, including events sent before. Page attributes wait
+  // for the next send; session and user ones (and reset) are sent at once, since later pages rely on them.
+  const setter = (name, now) => props => {
+    push(name, props);
+    if (now) flush();
+  };
+  // Attributes named `${prefix}<key>` on an element, as { key: value }.
+  const prefixed = (el, prefix) => {
+    const out = {};
+    for (let i = 0; i < el.attributes.length; i++) {
+      const a = el.attributes[i];
+      if (!a.name.indexOf(prefix)) out[a.name.slice(prefix.length)] = a.value;
+    }
+    return out;
+  };
+  // Page attributes declared on the script tag (data-page-<key>), for the first page view.
+  let scriptPage = script && prefixed(script, 'data-page-');
 
   const trackScroll = () => {
     const height = d.documentElement.scrollHeight;
@@ -69,6 +85,11 @@
     maxScroll = 0;
     visibleSince = isVisible() ? Date.now() : 0;
     push('page_view', ref ? { title: d.title, ref } : { title: d.title });
+    for (const key in scriptPage) {
+      push('$page', scriptPage);
+      break;
+    }
+    scriptPage = 0;
     trackScroll();
     flush();
   };
@@ -79,12 +100,7 @@
       const name = !tagged && el.getAttribute('data-tb-event');
       if (name) {
         tagged = 1;
-        const props = {};
-        for (let i = 0; i < el.attributes.length; i++) {
-          const a = el.attributes[i];
-          if (!a.name.indexOf('data-tb-prop-')) props[a.name.slice(13)] = a.value;
-        }
-        push(name, props);
+        push(name, prefixed(el, 'data-tb-prop-'));
       }
       if (!linked && el.tagName === 'A' && !el.protocol.indexOf('http')) {
         linked = 1;
@@ -131,15 +147,15 @@
     listen(w, 'popstate', navigated);
   };
 
+  // track(name, props): an event and its attributes. setPage / setSession / setUser(props): attributes
+  // for the whole page view, session or user, without sending an event; null removes one, and `id` in
+  // setUser is the user's ID. reset(): after a sign-out, forget the user and start a new session.
   w.tinybeam = {
     track: push,
-    // set({ plan: 'pro' }) adds properties to every later event; set({ plan: null }) removes one.
-    set: props => {
-      for (const key in props) {
-        if (props[key] == null) delete globals[key];
-        else globals[key] = props[key];
-      }
-    },
+    setPage: setter('$page'),
+    setSession: setter('$session', 1),
+    setUser: setter('$user', 1),
+    reset: setter('$reset', 1),
     flush,
   };
 
