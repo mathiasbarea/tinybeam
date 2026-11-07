@@ -196,9 +196,16 @@ the visit twice. Without it, records are matched by anonymous ID, URL and time.
 ### Bot traffic
 
 Every request the collector sees is classified as `human` or `bot`. Human reports exclude bots by default;
-bots go to their own dataset, where they can be analyzed separately. Most bots never run JavaScript, so this
-needs the collector in front of the site; with the script alone, only bots that execute JavaScript are seen
-(and flagged, see the signals below).
+bots go to their own dataset, where they can be analyzed separately.
+
+Seeing bots requires seeing the HTML requests themselves. Most bots download the HTML and nothing else: they
+run no JavaScript and load no images, so neither the script nor the noscript pixel reaches them (the pixel
+is for humans with JavaScript off). The supported ways are:
+
+- the collector in front of the site (a Worker or reverse proxy; it can be a pass-through that only logs),
+- importing the host's or CDN's request logs (for example Cloudflare Logpush) into the collector.
+
+With the script alone, only bots that execute JavaScript are seen (and flagged, see the signals below).
 
 **Classification**, in order:
 
