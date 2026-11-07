@@ -12,15 +12,17 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS tb_sites (id TEXT PRIMARY KEY, name TEXT NOT NULL, origins TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);',
 ].join('\n');
 
-// `consent` holds the site's consent settings (collector/consent.js); missing keys take the defaults.
+// `settings` (JSON) holds the site's consent settings (`consent`, collector/consent.js; missing keys take the
+// defaults) and where it is hosted (`host`, portal/install.js).
 const parse = text => { try { return text ? JSON.parse(text) : {}; } catch { return {}; } };
-const siteFromRow = row => row && { id: row.id, name: row.name, origins: JSON.parse(row.origins), paused: Boolean(row.paused), created_at: row.created_at, consent: parse(row.consent) };
+const siteFromRow = row => row && { id: row.id, name: row.name, origins: JSON.parse(row.origins), paused: Boolean(row.paused), created_at: row.created_at, ...settingsOf(row) };
+const settingsOf = row => { const s = parse(row.settings); return { consent: s.consent || {}, host: s.host || null }; };
 
 export function createStore(driver, { now = Date.now } = {}) {
   let ready;
   const init = () => (ready ??= (async () => {
     await driver.exec(SCHEMA);
-    await addColumns(driver, 'tb_sites', [['consent', 'TEXT']]);
+    await addColumns(driver, 'tb_sites', [['settings', 'TEXT']]);
   })());
   const all = async (sql, params = []) => { await init(); return driver.all(sql, params); };
   const one = async (sql, params) => (await all(sql, params))[0] || null;
@@ -61,8 +63,10 @@ export function createStore(driver, { now = Date.now } = {}) {
     async updateSite(id, { name, origins, paused }) {
       await run('UPDATE tb_sites SET name = ?, origins = ?, paused = ? WHERE id = ?', [name, JSON.stringify(origins), paused ? 1 : 0, id]);
     },
-    async updateConsent(id, consent) {
-      await run('UPDATE tb_sites SET consent = ? WHERE id = ?', [JSON.stringify(consent), id]);
+    // Changes part of the site's settings ({ consent } or { host }), keeping the rest.
+    async updateSettings(id, changes) {
+      const row = await one('SELECT settings FROM tb_sites WHERE id = ?', [id]);
+      await run('UPDATE tb_sites SET settings = ? WHERE id = ?', [JSON.stringify({ ...parse(row && row.settings), ...changes }), id]);
     },
     // Removes the site and every event recorded for it.
     async deleteSite(id, eventsTable = 'tinybeam_events') {

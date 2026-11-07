@@ -19,7 +19,9 @@ const DEFAULTS = {
   maxBody: 16 * 1024,
   maxEvents: 50,
   maxProps: 25, // per event; keys up to 40 characters, string values up to 500
-  script: null, // the browser script's code; when set, served at `${path}/tinybeam.js`
+  // The browser script, served from the collector: its code (served as `${path}/tinybeam.js`), or the
+  // bundles by file name ({ 'tinybeam.js': code, 'tinybeam-ids.js': code }).
+  script: null,
   secureCookies: true, // the visitor cookies (consent, stable ID) carry Secure; off only for plain-HTTP testing
 };
 
@@ -400,8 +402,10 @@ export function createCollector(options = {}) {
     if (pathname === `${config.path}/c`) return consent(request, context);
     if (pathname === `${config.path}/n`) return noscript(request, context);
     if (pathname === `${config.path}/banner.js`) return banner(request, context);
-    if (pathname === `${config.path}/tinybeam.js` && config.script) {
-      return new Response(config.script, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*' } });
+    const file = pathname.slice(config.path.length + 1);
+    const code = typeof config.script === 'string' ? (file === 'tinybeam.js' ? config.script : null) : config.script && Object.hasOwn(config.script, file) ? config.script[file] : null;
+    if (code) {
+      return new Response(code, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*' } });
     }
     return new Response('Not Found', { status: 404 });
   }

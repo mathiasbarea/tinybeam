@@ -83,6 +83,7 @@ test('a site added in the portal gets an ID and a snippet, and the collector acc
   const { app, driver, request, text } = await signedIn();
   const id = await addSite(request, 'Example <b>', 'https://example.com/some/page\nhttps://www.example.com');
   assert.match(id, /^[a-z0-9]{12}$/);
+  await request(`/portal/sites/${id}/install`, { form: { host: 'self' } });
   const page = await text(await request(`/portal/sites/${id}/settings`));
   assert.match(page, new RegExp(`data-site=&quot;${id}&quot;`));
   assert.match(page, /Example &lt;b&gt;/, 'names are escaped');
@@ -129,4 +130,64 @@ test('pages need a session', async () => {
   await request('/portal/setup', { form: { email: 'owner@example.com', password: PASSWORD } });
   const fresh = await setup();
   assert.equal((await fresh.request('/portal/sites/new')).status, 303);
+});
+
+test('installation asks where the site is hosted and shows only what fits there', async () => {
+  const { request, text } = await signedIn();
+  const id = await addSite(request);
+  const settings = async () => text(await request(`/portal/sites/${id}/settings`));
+  assert.match(await settings(), /Where is the site hosted\?/);
+  assert.doesNotMatch(await settings(), /data-site=/, 'no snippet until the host is known');
+
+  await request(`/portal/sites/${id}/install`, { form: { host: 'vercel' } });
+  const vercel = await settings();
+  assert.match(vercel, /vercel\.json/);
+  assert.match(vercel, /&quot;destination&quot;: &quot;https:\/\/analytics\.example\.com\/tb\/:path\*&quot;/);
+  assert.match(vercel, /src=&quot;\/tb\/tinybeam\.js&quot;/, 'the script from the site\'s own domain');
+  assert.match(vercel, /13 months/);
+
+  await request(`/portal/sites/${id}/install`, { form: { host: 'php' } });
+  const php = await settings();
+  assert.match(php, /examples\/endpoint\/id\.php/);
+  assert.match(php, /tinybeam-ids\.js&quot; data-site=&quot;[a-z0-9]+&quot; data-endpoint=&quot;https:\/\/analytics\.example\.com\/tb\/e&quot; data-id=&quot;endpoint&quot;/);
+
+  await request(`/portal/sites/${id}/install`, { form: { host: 'wordpress' } });
+  assert.match(await settings(), /Settings &gt; Tinybeam/);
+
+  await request(`/portal/sites/${id}/install`, { form: { host: 'nocode' } });
+  const nocode = await settings();
+  assert.match(nocode, /data-id=&quot;script&quot;/);
+  assert.match(nocode, /7 days in Safari/);
+});
+
+test('consent settings are saved, validated, and change the snippet when the banner is on', async () => {
+  const { app, request, text } = await signedIn();
+  const id = await addSite(request);
+  await request(`/portal/sites/${id}/install`, { form: { host: 'self' } });
+  const bad = await request(`/portal/sites/${id}/consent`, { form: { mode: 'region', regions: 'DE FRA' } });
+  assert.equal(bad.status, 400);
+  assert.match(await text(bad), /&quot;FRA&quot; is not a two-letter country code/);
+  await request(`/portal/sites/${id}/consent`, { form: { mode: 'all', regions: 'de, fr br', onRefusal: 'drop', banner: '1', bannerLanguage: 'auto', defaultLanguage: 'es', privacy: 'es https://example.com/privacidad', position: 'bottom-left', color: '#ff0000' } });
+  const site = await app.store.getSite(id);
+  assert.deepEqual(site.consent, { mode: 'all', regions: ['DE', 'FR', 'BR'], onRefusal: 'drop', banner: true, bannerLanguage: 'auto', defaultLanguage: 'es', privacy: { es: 'https://example.com/privacidad' }, position: 'bottom-left', color: '#ff0000' });
+  assert.match(await text(await request(`/portal/sites/${id}/settings`)), /data-consent=&quot;auto&quot;/);
+
+  // The collector reads the new settings: everyone is asked now, even in the US.
+  const res = await app.handle(new Request(`${ORIGIN}/tb/c?s=${id}&u=https%3A%2F%2Fexample.com%2F`, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' } }), { country: 'US' });
+  assert.deepEqual(await res.json(), { c: 'pending' });
+});
+
+test('banner texts can be edited per language, and new languages added', async () => {
+  const { app, request, text } = await signedIn();
+  const id = await addSite(request);
+  const page = await text(await request(`/portal/sites/${id}/banner?lang=es`));
+  assert.match(page, /placeholder="Aceptar"/, 'the built-in translation as a hint');
+  await request(`/portal/sites/${id}/banner`, { form: { lang: 'es', accept: 'Dale', reject: '' } });
+  await request(`/portal/sites/${id}/banner`, { form: { lang: 'ja', accept: '同意する' } });
+  const site = await app.store.getSite(id);
+  assert.deepEqual(site.consent.texts, { es: { accept: 'Dale' }, ja: { accept: '同意する' } });
+  const preview = await text(await request(`/portal/sites/${id}/banner?lang=es`));
+  assert.match(preview, />Dale</);
+  assert.match(preview, />Rechazar</);
+  assert.match(preview, /href="\/portal\/sites\/[a-z0-9]+\/banner\?lang=ja"/, 'the added language is listed');
 });

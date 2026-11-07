@@ -9,7 +9,7 @@ import { serve, sqliteDriver } from '../collector/node.js';
 
 const app = createTinybeam({
   driver: await sqliteDriver(process.env.TINYBEAM_DB || 'tinybeam.db'),
-  script: readFileSync(new URL('../dist/tinybeam.js', import.meta.url), 'utf8'),
+  script: Object.fromEntries(['tinybeam.js', 'tinybeam-ids.js'].map(name => [name, readFileSync(new URL(`../dist/${name}`, import.meta.url), 'utf8')])),
   // Secure cookies need HTTPS; browsers other than Safari also accept them on http://localhost.
   secureCookies: process.env.INSECURE_COOKIES !== '1',
 });

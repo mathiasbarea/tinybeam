@@ -1,7 +1,10 @@
 // The portal: server-rendered pages for setting up the owner account, signing in and managing sites. Like
 // the collector, it is a web-standard handler (Request in, Response out) and needs no JavaScript in the
 // browser. Pages live under `basePath`; the owner mounts it on whatever URL they want.
+import { BANNER_TEXTS, TEXT_KEYS, bannerLanguages, bannerTexts } from '../collector/banner.js';
+import { CONSENT_REGIONS, consentSettings } from '../collector/consent.js';
 import { hashPassword, verifyPassword } from './auth.js';
+import { HOSTS, WAYS, checkInstall, installSteps } from './install.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const html = (strings, ...values) => strings.reduce((out, s, i) => out + s + (i < values.length ? (values[i] && values[i].raw !== undefined ? values[i].raw : escape(values[i])) : ''), '');
@@ -15,7 +18,7 @@ header{display:flex;justify-content:space-between;align-items:center;padding:12p
 header a{color:inherit;text-decoration:none;font-weight:600}main{max-width:760px;margin:0 auto;padding:24px 20px}
 h1{font-size:22px;margin:0 0 16px}h2{font-size:17px;margin:28px 0 8px}.muted{color:var(--muted)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin:12px 0}
-label{display:block;margin:12px 0 4px;font-weight:600}input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:inherit;font:inherit}
+label{display:block;margin:12px 0 4px;font-weight:600}input,textarea,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:inherit;font:inherit}
 button,.button{display:inline-block;margin-top:14px;padding:8px 14px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer;text-decoration:none}
 button.link{background:none;color:inherit;padding:0;margin:0;text-decoration:underline}button.danger{background:var(--danger)}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
@@ -43,6 +46,8 @@ export function parseOrigins(text) {
   return origins.length ? [origins, null] : [null, 'Add at least one origin'];
 }
 
+const CONSENT_STATES = ['granted', 'not_required', 'pending', 'denied', 'gpc', 'unknown'];
+const CONSENT_LABELS = { granted: 'Accepted', not_required: 'Not required (region)', pending: 'Not decided yet', denied: 'Refused', gpc: 'Global Privacy Control', unknown: 'Not recorded' };
 const RANGES = { '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5, '90d': 90 * 864e5 };
 const number = n => (n == null ? '–' : Number(n).toLocaleString('en-US'));
 const duration = ms => (ms == null ? '–' : ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`);
@@ -91,16 +96,98 @@ ${raw(error ? html`<p class="error">${error}</p>` : '')}
 ${raw(site.id ? html`<label><input type="checkbox" name="paused" value="1" style="width:auto" ${raw(site.paused ? 'checked' : '')}> Paused (stop recording)</label>` : '')}
 <button>${site.id ? 'Save' : 'Add site'}</button></form>`;
 
-  const snippet = (site, origin) => {
-    const firstParty = `<script src="${collectorPath}/tinybeam.js" data-site="${site.id}" data-pv defer></script>\n<noscript><img src="${collectorPath}/n?s=${site.id}" alt="" width="1" height="1"></noscript>`;
-    const direct = `<script src="${origin}${collectorPath}/tinybeam.js" data-site="${site.id}" data-endpoint="${origin}${collectorPath}/e" data-pv defer></script>\n<noscript><img src="${origin}${collectorPath}/n?s=${site.id}" alt="" width="1" height="1"></noscript>`;
+  // Installation: one question (where the site is hosted), then only the steps that fit, and a check of how
+  // recent page views kept the stable ID (portal/install.js).
+  const install = (site, hostKey, origin, check) => {
+    const base = `/sites/${site.id}`;
+    const host = HOSTS.find(h => h.key === hostKey);
+    const steps = host ? installSteps(host.key, site, { origin, path: collectorPath, banner: consentSettings(site).banner }) : [];
     return html`
 <h2>Install</h2>
-<p>Paste this before <code>&lt;/head&gt;</code> on every page.</p>
-<p><strong>From your site's own domain</strong> (recommended: first-party, rarely blocked). Route <code>${collectorPath}/</code> on your site to this collector with your proxy or host's rewrites.</p>
-<pre>${firstParty}</pre>
-<p><strong>Directly to this collector</strong>, if you can't route a path on your site.</p>
-<pre>${direct}</pre>`;
+<form method="post" action="${url(`${base}/install`)}" class="card">
+<label for="host">Where is the site hosted?</label>
+<select id="host" name="host">${raw(`<option value="">Choose…</option>` + HOSTS.map(h => html`<option value="${h.key}" ${raw(h.key === hostKey ? 'selected' : '')}>${h.label}</option>`).join(''))}</select>
+<button>Show how to install</button></form>
+${raw(steps.map((step, i) => html`<div class="card"><h3>${i + 1}. ${step.title}</h3>${raw(step.text ? html`<p>${step.text}</p>` : '')}${raw(step.code ? html`<pre>${step.code}</pre>` : '')}</div>`).join(''))}
+${raw(host ? html`<p class="note">Returning visitors are recognized for ${WAYS[host.way].lifetime}.</p>` : '')}
+${raw(check ? html`<p class="${check.ok === false ? 'error' : 'note'}">${check.text}</p>` : '')}`;
+  };
+
+  const MODES = [
+    ['region', 'Ask in the regions that require it, measure fully elsewhere'],
+    ['all', 'Ask everyone, wherever they are'],
+    ['anonymous', 'Never ask: anonymous measurement only, no stable ID'],
+    ['full', 'Never ask: full measurement everywhere'],
+  ];
+  const options = (list, current) => list.map(([value, label]) => html`<option value="${value}" ${raw(value === current ? 'selected' : '')}>${label}</option>`).join('');
+  const consentForm = (site, error) => {
+    const c = consentSettings(site);
+    const languages = bannerLanguages(c).map(l => [l, l]);
+    return html`${raw(error ? html`<p class="error">${error}</p>` : '')}
+<form method="post" action="${url(`/sites/${site.id}/consent`)}" class="card">
+<label for="mode">When to ask for consent</label><select id="mode" name="mode">${raw(options(MODES, c.mode))}</select>
+<label for="regions">Regions that require consent</label>
+<textarea id="regions" name="regions" rows="3">${c.regions.join(' ')}</textarea>
+<p class="note">Country codes (ISO 3166-1), used by the first option. Default: the EU and EEA, the United Kingdom and Switzerland. Visitors from an unknown country are asked too. The country comes from the visitor's IP address, which is approximate (VPNs, travelers); if the site's company is established in the EU, asking everyone is the safer choice.</p>
+<label for="onRefusal">When a visitor refuses</label><select id="onRefusal" name="onRefusal">${raw(options([['count', 'Count their visits without any identifier'], ['drop', 'Don\'t measure them (only the refusal is recorded)']], c.onRefusal))}</select>
+<label><input type="checkbox" name="banner" value="1" style="width:auto" ${raw(c.banner ? 'checked' : '')}> Use Tinybeam's banner</label>
+<p class="note">Without it, the site's own consent banner calls <code>tinybeam.consent(true | false)</code>. Changing this changes the snippet above.</p>
+<label for="bannerLanguage">Banner language</label><select id="bannerLanguage" name="bannerLanguage">${raw(options([['auto', 'Follow the page (or the visitor\'s browser)'], ...languages], c.bannerLanguage || 'auto'))}</select>
+<label for="defaultLanguage">Default language</label><select id="defaultLanguage" name="defaultLanguage">${raw(options(languages, c.defaultLanguage || 'en'))}</select>
+<label for="privacy">Privacy policy links</label>
+<textarea id="privacy" name="privacy" rows="3" placeholder="en https://example.com/privacy">${Object.entries(c.privacy || {}).map(([l, u]) => `${l} ${u}`).join('\n')}</textarea>
+<p class="note">One per line: language code and address.</p>
+<label for="position">Banner position</label><select id="position" name="position">${raw(options([['bottom', 'Bottom, centered'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right']], c.position || 'bottom'))}</select>
+<label for="color">Button color</label><input id="color" name="color" type="color" value="${c.color || '#2457d6'}" style="display:block;width:80px;height:38px">
+<button>Save consent settings</button></form>
+<p><a href="${url(`/sites/${site.id}/banner`)}">Edit the banner's texts and languages</a></p>`;
+  };
+  // Consent settings from the form; returns [settings, error].
+  const parseConsent = fields => {
+    const regions = String(fields.regions || '').toUpperCase().split(/[\s,;]+/).filter(Boolean);
+    const bad = regions.find(r => !/^[A-Z]{2}$/.test(r));
+    if (bad) return [null, `"${bad}" is not a two-letter country code`];
+    const privacy = {};
+    for (const line of String(fields.privacy || '').split('\n').map(l => l.trim()).filter(Boolean)) {
+      const [lang, link] = line.split(/\s+/);
+      if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(lang || '') || !/^https?:\/\/\S+$/.test(link || '')) return [null, `"${line}" should be a language code and an address, like "en https://example.com/privacy"`];
+      privacy[lang] = link;
+    }
+    const pick = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
+    return [{
+      mode: pick(fields.mode, MODES.map(m => m[0]), 'region'),
+      regions: regions.length ? [...new Set(regions)] : CONSENT_REGIONS,
+      onRefusal: pick(fields.onRefusal, ['count', 'drop'], 'count'),
+      banner: fields.banner === '1',
+      bannerLanguage: /^(auto|[a-z]{2,3}(-[a-z0-9]{2,8})?)$/.test(fields.bannerLanguage || '') ? fields.bannerLanguage : 'auto',
+      defaultLanguage: /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(fields.defaultLanguage || '') ? fields.defaultLanguage : 'en',
+      privacy,
+      position: pick(fields.position, ['bottom', 'bottom-left', 'bottom-right'], 'bottom'),
+      color: /^#[0-9a-fA-F]{6}$/.test(fields.color || '') ? fields.color : '#2457d6',
+    }, null];
+  };
+
+  // The banner's texts in one language: the owner's own over the built-in translation, with a preview.
+  const bannerPage = (site, lang) => {
+    const c = consentSettings(site);
+    const own = (c.texts || {})[lang] || {};
+    const builtIn = { ...BANNER_TEXTS.en, ...(BANNER_TEXTS[lang] || BANNER_TEXTS[lang.split('-')[0]] || {}) };
+    const t = bannerTexts(c, lang);
+    const labels = { title: 'Title', body: 'Text', accept: 'Accept button', reject: 'Reject button', customize: 'Choose button', save: 'Save button', analytics: 'Returning-visitor option', ads: 'Advertising option', privacy: 'Privacy policy link' };
+    const base = `/sites/${site.id}/banner`;
+    return html`${raw(siteHeader(site, 'settings'))}
+<h2>Banner texts</h2>
+<p class="ranges">${raw(bannerLanguages(c).map(l => html`<a class="${l === lang ? 'on' : ''}" href="${url(base)}?lang=${l}">${l}</a>`).join(''))}</p>
+<form method="get" action="${url(base)}" class="card" style="display:flex;gap:8px;align-items:flex-end"><div style="flex:1"><label for="lang">Add a language</label><input id="lang" name="lang" placeholder="ja" pattern="[a-z]{2,3}(-[a-z0-9]{2,8})?" required></div><button>Add</button></form>
+<form method="post" action="${url(base)}" class="card"><input type="hidden" name="lang" value="${lang}">
+${raw(TEXT_KEYS.map(key => key === 'body'
+    ? html`<label for="t-${key}">${labels[key]}</label><textarea id="t-${key}" name="${key}" rows="4" maxlength="600" placeholder="${builtIn[key]}">${own[key] || ''}</textarea>`
+    : html`<label for="t-${key}">${labels[key]}</label><input id="t-${key}" name="${key}" maxlength="120" placeholder="${builtIn[key]}" value="${own[key] || ''}">`).join(''))}
+<p class="note">Empty fields use the ${BANNER_TEXTS[lang] || BANNER_TEXTS[lang.split('-')[0]] ? 'built-in translation' : 'English text'} shown in grey. Keep "Reject" as easy to find as "Accept", and keep the sentence saying visits are counted anonymously either way.</p>
+<button>Save ${lang} texts</button></form>
+<h2>Preview</h2>
+<div class="card" lang="${lang}" style="max-width:520px"><strong>${t.title}</strong><p style="margin:4px 0 12px">${t.body} <a href="#">${t.privacy}</a></p>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="button" style="margin:0;background:${c.color || '#2457d6'}">${t.reject}</span><span class="button" style="margin:0;background:transparent;color:${c.color || '#2457d6'};border:1px solid ${c.color || '#2457d6'}">${t.customize}</span><span class="button" style="margin:0;background:${c.color || '#2457d6'}">${t.accept}</span></div></div>`;
   };
 
   const empty = '<p class="note">Nothing yet.</p>';
@@ -187,7 +274,7 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
       return redirect(`/sites/${site.id}/settings`);
     }
 
-    const match = path.match(/^\/sites\/([a-z0-9]+)(?:\/(settings|delete|bots|events\/([\w.:-]+)))?$/);
+    const match = path.match(/^\/sites\/([a-z0-9]+)(?:\/(settings|delete|bots|install|consent|banner|events\/([\w.:-]+)))?$/);
     if (match) {
       const site = await store.getSite(match[1]);
       if (!site) return page('Not found', '<h1>Site not found</h1>', user, 404);
@@ -201,6 +288,38 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
         await store.deleteSite(site.id);
         return redirect('/');
       }
+      if (section === 'install') {
+        if (!post) return redirect(`${base}/settings`);
+        const { host = '' } = await form(request);
+        await store.updateSettings(site.id, { host: HOSTS.some(h => h.key === host) ? host : null });
+        return redirect(`${base}/settings`);
+      }
+      if (section === 'consent') {
+        if (!post) return redirect(`${base}/settings`);
+        const [consent, error] = parseConsent(await form(request));
+        if (error) return page(site.name, html`${raw(siteHeader(site, 'settings'))}<h2>Consent</h2>${raw(consentForm(site, error))}`, user, 400, {}, true);
+        await store.updateSettings(site.id, { consent: { ...site.consent, ...consent } });
+        return redirect(`${base}/settings`);
+      }
+      if (section === 'banner') {
+        if (post) {
+          const fields = await form(request);
+          const lang = String(fields.lang || '');
+          if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(lang)) return redirect(`${base}/banner`);
+          const own = {};
+          for (const key of TEXT_KEYS) {
+            const value = String(fields[key] || '').trim().slice(0, key === 'body' ? 600 : 120);
+            if (value) own[key] = value;
+          }
+          const texts = { ...(site.consent.texts || {}) };
+          if (Object.keys(own).length) texts[lang] = own; else delete texts[lang];
+          await store.updateSettings(site.id, { consent: { ...site.consent, texts } });
+          return redirect(`${base}/banner?lang=${lang}`);
+        }
+        const asked = searchParams.get('lang') || '';
+        const lang = /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(asked) ? asked : consentSettings(site).defaultLanguage || 'en';
+        return page(`${site.name} · Banner`, bannerPage(site, lang), user, 200, {}, true);
+      }
       if (section === 'settings') {
         if (post) {
           const fields = await form(request);
@@ -210,9 +329,11 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
           await store.updateSite(site.id, { name, origins, paused: fields.paused === '1' });
           return redirect(`${base}/settings`);
         }
+        const check = site.host ? checkInstall(site.host, await queries.installCheck(site.id, now() - 7 * 864e5, now())) : null;
         return page(site.name, html`${raw(siteHeader(site, 'settings'))}
 <p class="muted">Site ID <code>${site.id}</code></p>
-${raw(snippet(site, origin))}
+${raw(install(site, site.host, origin, check))}
+<h2>Consent</h2>${raw(consentForm(site))}
 <h2>Settings</h2>${raw(siteForm(`${base}/settings`, site))}
 <h2>Delete</h2>
 <form method="post" action="${url(`${base}/delete`)}" class="card">
@@ -224,7 +345,12 @@ ${raw(snippet(site, origin))}
       const rangeKey = RANGES[searchParams.get('range')] ? searchParams.get('range') : '7d';
       const to = now();
       const from = to - RANGES[rangeKey];
-      const ranges = html`<p class="ranges">${raw(Object.keys(RANGES).map(k => html`<a class="${k === rangeKey ? 'on' : ''}" href="${url(path)}?range=${k}">${k}</a>`).join(''))}</p>`;
+      // Report filters: consent state (docs/spec.md, section 5).
+      const consentFilter = CONSENT_STATES.includes(searchParams.get('consent')) ? searchParams.get('consent') : null;
+      const filter = { consent: consentFilter };
+      const query = (changes = {}) => `?${new URLSearchParams(Object.entries({ range: rangeKey, consent: consentFilter, ...changes }).filter(([, v]) => v))}`;
+      const ranges = html`<p class="ranges">${raw(Object.keys(RANGES).map(k => html`<a class="${k === rangeKey ? 'on' : ''}" href="${url(path)}${query({ range: k })}">${k}</a>`).join(''))}</p>`;
+      const consentBar = html`<p class="ranges">Consent: ${raw([[null, 'all'], ...CONSENT_STATES.map(s => [s, CONSENT_LABELS[s]])].map(([value, label]) => html`<a class="${value === consentFilter ? 'on' : ''}" href="${url(path)}${query({ consent: value })}">${label}</a>`).join(''))}</p>`;
 
       if (section === 'bots') {
         const data = await queries.bots(site.id, from, to);
@@ -244,27 +370,32 @@ ${raw(card('Visits referred by AI assistants', bars(data.aiReferrals)))}
       }
 
       if (eventName) {
-        const data = await queries.event(site.id, eventName, from, to);
+        const data = await queries.event(site.id, eventName, from, to, filter);
         const props = data.properties.map(p => card(html`${p.key} <span class="tag">${p.scope}</span>`, bars(p.values, data.total))).join('');
         return page(`${site.name} · ${eventName}`, html`${raw(siteHeader(site, 'overview', rangeKey))}
-<h2>Event: ${eventName}</h2>${raw(ranges)}
+<h2>Event: ${eventName}</h2>${raw(ranges)}${raw(consentBar)}
 <div class="stats">${raw(stat(number(data.total), 'events'))}</div>
 <p class="note">Each attribute shows the scope it comes from. Page, session and user attributes apply to every event of that page view, session or user, including events sent before they were set.</p>
 <div class="grid">${raw(props || card('Attributes', empty))}</div>${raw(partial(data.truncated))}`, user, 200, {}, true);
       }
 
-      const [data, attrs] = await Promise.all([queries.overview(site.id, from, to), queries.attributeSummary(site.id, from, to)]);
+      const [data, attrs] = await Promise.all([queries.overview(site.id, from, to, filter), queries.attributeSummary(site.id, from, to)]);
       const t = data.totals;
       const eventList = data.events.length
-        ? html`<table class="bar">${raw(data.events.map(e => html`<tr><td><a href="${url(`${base}/events/${e.key}`)}?range=${rangeKey}">${e.key}</a></td><td>${number(e.value)}</td></tr>`).join(''))}</table>`
+        ? html`<table class="bar">${raw(data.events.map(e => html`<tr><td><a href="${url(`${base}/events/${e.key}`)}${query()}">${e.key}</a></td><td>${number(e.value)}</td></tr>`).join(''))}</table>`
         : empty;
+      const consentTotal = data.consent.reduce((a, r) => a + r.value, 0);
+      const consentRows = list => list.map(r => ({ key: CONSENT_LABELS[r.key] || r.key, value: r.value }));
+      const consentCard = card('Consent', bars(consentRows(data.consent), consentTotal)
+        + html`<p class="note">Page views by consent state. Sessions:</p>` + bars(consentRows(data.consentSessions))
+        + html`<p class="note">Refusals have no sessions: they are counted without any identifier. Visitors who accept are recognized across days; the others only within a day, so a report on accepted visitors only covers ${consentTotal ? Math.round(((data.consent.find(r => r.key === 'granted') || { value: 0 }).value / consentTotal) * 100) : 0}% of page views, and they may not behave like everyone else.</p>`);
       const scopeCards = ['page', 'session', 'user'].map(scope => card(`${scope[0].toUpperCase()}${scope.slice(1)} attributes`,
         attrs[scope].length ? attrs[scope].map(a => html`<p style="margin:8px 0 2px"><strong>${a.key}</strong></p>${raw(bars(a.values))}`).join('') : empty)).join('');
       const jsLabels = { on: 'Script ran', off: 'Disabled (noscript pixel)', unknown: 'No script data (server only)' };
       const jsTotal = data.js.reduce((a, r) => a + r.value, 0);
-      return page(site.name, html`${raw(siteHeader(site, 'overview', rangeKey))}${raw(ranges)}
+      return page(site.name, html`${raw(siteHeader(site, 'overview', rangeKey))}${raw(ranges)}${raw(consentBar)}
 <div class="stats">
-${raw(stat(number(t.visitors), 'visitors', 'Daily unique visitors, summed: without consent the anonymous ID changes every day.'))}
+${raw(stat(number(t.visitors), 'visitors', `${number(t.stableVisitors)} recognized across days (a stable ID, with consent or where none is needed); the rest are daily unique visitors, summed, since without a stable ID a returning visitor counts once per day.`))}
 ${raw(stat(number(t.sessions), 'sessions'))}
 ${raw(stat(number(t.pageViews), 'page views'))}
 ${raw(stat(duration(t.avgVisibleMs), 'visible time per page view', `Over ${number(t.timedPageViews)} page views with engagement data.`))}
@@ -282,6 +413,7 @@ ${raw(card('Devices', bars(data.devices)))}
 ${raw(card('Browsers', bars(data.browsers)))}
 ${raw(card('Operating systems', bars(data.os)))}
 ${raw(card('JavaScript', bars(data.js.map(r => ({ key: jsLabels[r.key] || r.key, value: r.value })), jsTotal)))}
+${raw(consentCard)}
 </div>
 <h2>Attributes</h2>
 <p class="note">Current values: how many page views, sessions or users have each one.</p>

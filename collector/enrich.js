@@ -92,7 +92,9 @@ export function geoFromHeaders(headers) {
     return null;
   };
   return {
-    country: first(['cf-ipcountry', 'x-vercel-ip-country', 'cloudfront-viewer-country', 'x-country-code', 'fastly-geo-country']),
+    // x-tinybeam-country: set by a proxy on the site (portal, Installation), which knows the visitor's
+    // country better than the CDN in front of the collector, which only sees the proxy.
+    country: first(['x-tinybeam-country', 'cf-ipcountry', 'x-vercel-ip-country', 'cloudfront-viewer-country', 'x-country-code', 'fastly-geo-country']),
     region: first(['x-vercel-ip-country-region', 'cloudfront-viewer-country-region']),
     city: first(['x-vercel-ip-city', 'cloudfront-viewer-city']),
   };

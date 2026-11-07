@@ -19,12 +19,20 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
     }
   };
   const range = 'site = ? AND received_at >= ? AND received_at < ?';
+  // The period, plus the report's filters: { consent } (a consent state, or "unknown" for records from
+  // before consent was recorded). Returns [sql, params].
+  const scope = (site, from, to, filter = {}) => {
+    if (!filter.consent) return [range, [site, from, to]];
+    if (filter.consent === 'unknown') return [`${range} AND consent IS NULL`, [site, from, to]];
+    return [`${range} AND consent = ?`, [site, from, to, filter.consent]];
+  };
 
   // Page views of humans, one per page view: the script's record when there is one, else the server's
   // (js unknown) or the noscript pixel's (js off).
-  async function pageViews(site, from, to) {
-    const list = await rows(`SELECT pv, source, js, path, referrer_type, referrer_host, utm_source, utm_campaign, country, device, browser, os, aid, sid
-      FROM $t WHERE ${range} AND kind = 'event' AND traffic = 'human' AND name = 'page_view' ORDER BY received_at LIMIT ${limit + 1}`, [site, from, to]);
+  async function pageViews(site, from, to, filter) {
+    const [where, params] = scope(site, from, to, filter);
+    const list = await rows(`SELECT pv, source, js, path, referrer_type, referrer_host, utm_source, utm_campaign, country, device, browser, os, aid, sid, consent, id_store
+      FROM $t WHERE ${where} AND kind = 'event' AND traffic = 'human' AND name = 'page_view' ORDER BY received_at LIMIT ${limit + 1}`, params);
     const truncated = list.length > limit;
     const byPv = new Map();
     const views = [];
@@ -36,15 +44,19 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
     return { views, truncated };
   }
 
-  async function overview(site, from, to) {
-    const { views, truncated } = await pageViews(site, from, to);
-    const dims = { pages: new Map(), referrerTypes: new Map(), referrers: new Map(), campaigns: new Map(), countries: new Map(), devices: new Map(), browsers: new Map(), os: new Map(), js: new Map() };
+  async function overview(site, from, to, filter) {
+    const [where, params] = scope(site, from, to, filter);
+    const { views, truncated } = await pageViews(site, from, to, filter);
+    const dims = { pages: new Map(), referrerTypes: new Map(), referrers: new Map(), campaigns: new Map(), countries: new Map(), devices: new Map(), browsers: new Map(), os: new Map(), js: new Map(), consent: new Map(), consentSessions: new Map() };
     const visitors = new Set();
+    const stableVisitors = new Set(); // recognized across days (a stable ID); the rest only within a day
     const sessions = new Set();
     for (const v of views) {
       count(dims.pages, v.path);
-      // Sources, referrers and campaigns count sessions, from the page view that started each one.
-      if (!v.sid || !sessions.has(v.sid)) {
+      // Sources, referrers and campaigns count sessions, from the page view that started each one. Page
+      // views without a session (refusals, counted without any identifier) count when they come from
+      // outside the site, the closest thing to a session's start.
+      if (v.sid ? !sessions.has(v.sid) : v.referrer_type !== 'internal') {
         count(dims.referrerTypes, v.referrer_type || 'direct');
         if (v.referrer_host && v.referrer_type !== 'internal') count(dims.referrers, v.referrer_host);
         if (v.utm_source || v.utm_campaign) count(dims.campaigns, [v.utm_source, v.utm_campaign].filter(Boolean).join(' / '));
@@ -54,10 +66,13 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
       count(dims.browsers, v.browser || 'Unknown');
       count(dims.os, v.os || 'Unknown');
       count(dims.js, v.js || 'on');
+      count(dims.consent, v.consent || 'unknown');
+      if (v.sid && !sessions.has(v.sid)) count(dims.consentSessions, v.consent || 'unknown');
       if (v.aid) visitors.add(v.aid);
+      if (v.aid && v.id_store) stableVisitors.add(v.aid);
       if (v.sid) sessions.add(v.sid);
     }
-    const engagement = await rows(`SELECT pv, props FROM $t WHERE ${range} AND kind = 'event' AND traffic = 'human' AND name = 'engagement' LIMIT ${limit + 1}`, [site, from, to]);
+    const engagement = await rows(`SELECT pv, props FROM $t WHERE ${where} AND kind = 'event' AND traffic = 'human' AND name = 'engagement' LIMIT ${limit + 1}`, params);
     const time = new Map();
     const scroll = new Map();
     for (const row of engagement.slice(0, limit)) {
@@ -68,13 +83,14 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
     const depth = new Map([[0, 0], [25, 0], [50, 0], [75, 0], [100, 0]]);
     for (const value of scroll.values()) count(depth, value);
     const totalMs = [...time.values()].reduce((a, b) => a + b, 0);
-    const events = await rows(`SELECT name, COUNT(*) AS n FROM $t WHERE ${range} AND kind = 'event' AND traffic = 'human' AND name NOT IN ('page_view', 'engagement') GROUP BY name ORDER BY n DESC LIMIT 50`, [site, from, to]);
+    const events = await rows(`SELECT name, COUNT(*) AS n FROM $t WHERE ${where} AND kind = 'event' AND traffic = 'human' AND name NOT IN ('page_view', 'engagement') GROUP BY name ORDER BY n DESC LIMIT 50`, params);
     const bots = await rows(`SELECT COUNT(*) AS n FROM $t WHERE ${range} AND traffic = 'bot'`, [site, from, to]);
     return {
       truncated: truncated || engagement.length > limit,
       totals: {
         pageViews: views.length,
-        visitors: visitors.size, // the anonymous ID changes daily: daily unique visitors, summed
+        visitors: visitors.size, // stable IDs, plus daily hashes (daily unique visitors, summed)
+        stableVisitors: stableVisitors.size,
         sessions: sessions.size,
         avgVisibleMs: time.size ? Math.round(totalMs / time.size) : null,
         timedPageViews: time.size,
@@ -84,6 +100,7 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
       countries: top(dims.countries), devices: top(dims.devices), browsers: top(dims.browsers), os: top(dims.os),
       js: top(dims.js), scrollDepth: [...depth].map(([key, value]) => ({ key: `${key}%`, value })), scrolledPageViews: scroll.size,
       events: events.map(e => ({ key: e.name, value: Number(e.n) })),
+      consent: top(dims.consent), consentSessions: top(dims.consentSessions),
     };
   }
 
@@ -124,8 +141,9 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
 
   // One event, broken down by every attribute that applies to it (its own and the resolved page, session
   // and user attributes, including ones set after the event).
-  async function event(site, name, from, to) {
-    const list = await rows(`SELECT pv, sid, props FROM $t WHERE ${range} AND kind = 'event' AND traffic = 'human' AND name = ? LIMIT ${limit + 1}`, [site, from, to, name]);
+  async function event(site, name, from, to, filter) {
+    const [where, params] = scope(site, from, to, filter);
+    const list = await rows(`SELECT pv, sid, props FROM $t WHERE ${where} AND kind = 'event' AND traffic = 'human' AND name = ? LIMIT ${limit + 1}`, [...params, name]);
     const state = await attributes(site, from, to);
     const breakdown = new Map();
     for (const row of list.slice(0, limit)) {
@@ -177,5 +195,11 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
     };
   }
 
-  return { overview, event, attributeSummary, bots, pageViews, attributes, resolve };
+  // How the site's page views kept the stable ID lately (id_store), for the installation check.
+  async function installCheck(site, from, to) {
+    const list = await rows(`SELECT id_store AS k, COUNT(*) AS n FROM $t WHERE ${range} AND kind = 'event' AND source = 'script' AND name = 'page_view' AND consent IN ('granted', 'not_required') GROUP BY id_store`, [site, from, to]);
+    return Object.fromEntries(list.map(r => [r.k || 'none', Number(r.n)]));
+  }
+
+  return { overview, event, attributeSummary, bots, pageViews, attributes, resolve, installCheck };
 }

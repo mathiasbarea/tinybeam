@@ -51,7 +51,7 @@ test('the overview merges server and script page views and counts each visitor a
   const { app, site } = await seeded();
   const queries = app.portal.queries;
   const data = await queries.overview(site.id, Date.now() - DAY, Date.now() + DAY);
-  assert.deepEqual(data.totals, { pageViews: 4, visitors: 3, sessions: 3, avgVisibleMs: 20_000, timedPageViews: 2, bots: 3 });
+  assert.deepEqual(data.totals, { pageViews: 4, visitors: 3, stableVisitors: 3, sessions: 3, avgVisibleMs: 20_000, timedPageViews: 2, bots: 3 });
   assert.deepEqual(data.pages, [{ key: '/pricing/', value: 2 }, { key: '/', value: 1 }, { key: '/about/', value: 1 }]);
   assert.deepEqual(Object.fromEntries(data.referrerTypes.map(r => [r.key, r.value])), { ai_assistant: 1, search: 1, direct: 1 });
   assert.deepEqual(data.campaigns, [{ key: 'news / launch', value: 1 }]);
@@ -99,5 +99,19 @@ test('the dashboard pages render for the signed-in owner, escaping what visitors
   assert.doesNotMatch(overview, /<img src=x/);
   assert.match(await (await get(`/portal/sites/${site.id}/bots?range=30d`)).text(), /GPTBot/);
   assert.match(await (await get(`/portal/sites/${site.id}/events/video_play`)).text(), /experiment/);
+  await get(`/portal/sites/${site.id}/install`, { host: 'vercel' });
   assert.match(await (await get(`/portal/sites/${site.id}/settings`)).text(), /data-site=&quot;/);
+});
+
+test('reports can be filtered by consent state, and the install check reads how IDs were kept', async () => {
+  const { app, site } = await seeded();
+  const queries = app.portal.queries;
+  // A visitor from Germany: consent required, not decided yet.
+  await app.handle(new Request('https://example.com/tb/e', { method: 'POST', headers: { 'user-agent': CHROME }, body: JSON.stringify({ v: 1, s: site.id, u: 'https://example.com/de/', pv: 'd1', e: [{ n: 'page_view', t: 1, p: {} }] }) }), { ip: '4.4.4.4', country: 'DE' });
+  const all = await queries.overview(site.id, Date.now() - DAY, Date.now() + DAY);
+  assert.deepEqual(Object.fromEntries(all.consent.map(r => [r.key, r.value])), { not_required: 4, pending: 1 });
+  assert.equal(all.totals.stableVisitors, 3, 'the pending visitor is only known for the day');
+  const pending = await queries.overview(site.id, Date.now() - DAY, Date.now() + DAY, { consent: 'pending' });
+  assert.deepEqual([pending.totals.pageViews, pending.pages[0].key], [1, '/de/']);
+  assert.deepEqual(await queries.installCheck(site.id, Date.now() - DAY, Date.now() + DAY), { collector: 3 });
 });

@@ -1,6 +1,7 @@
 # Tinybeam spec (draft)
 
-Status: **draft.** Nothing here is implemented yet; names and fields may change until the first release.
+Status: **draft.** Implemented so far: the core script, the collector, consent (section 5) and the portal's first
+pages; names and fields may change until the first release.
 Decisions taken during review are listed at the end.
 
 ## 1. Scope
@@ -25,7 +26,9 @@ be reported together with the base it comes from.
 ```
 
 - One file per site: the modules the site uses are selected at build time and bundled with the core.
-  Available today: the core (`tinybeam.js`), which includes SPA navigation.
+  Available today: the core (`tinybeam.js`), which includes SPA navigation and consent, and
+  `tinybeam-ids.js`, the core plus keeping the stable ID through the site's endpoint or in cookies the
+  script writes (section 5), for sites whose collector is on another domain.
 - Served from the site's own origin with long-lived, immutable caching (hashed file name in builds).
 - Starts as soon as it runs (with `defer`, right after the HTML is parsed) and sends the `page_view` then.
   The beacon is a small, low-priority request that doesn't delay rendering, and waiting for the `load`
@@ -247,9 +250,15 @@ and what counts refusals when refusals aren't measured.
 
 Two first-party cookies on the site's domain:
 
-- `tb_c`: the decision (`analytics` and `ads`), 6 months, so the banner doesn't come back on every page.
-  Remembering a refusal is strictly necessary for it to be respected, so it needs no consent itself.
-- `tb_id`: the stable anonymous ID, 13 months, only with consent (`granted` or `not_required`).
+- `tb_c`: the decision as two digits, analytics then ads (`10`: analytics granted, ads refused), 6 months,
+  so the banner doesn't come back on every page. Remembering a refusal is strictly necessary for it to be
+  respected, so it needs no consent itself. It is readable by the script (not `HttpOnly`), so the script
+  knows a decision exists without asking. In collector mode, `--` (1 day) marks a visitor who needs no
+  decision (a region where consent isn't required); it is not a decision.
+- `tb_id`: the stable anonymous ID, 13 months, renewed on each visit, only with consent (`granted` or
+  `not_required`). The collector creates it from the day's hash, so the visitor's records of that day and
+  the cookie's later ones are the same visitor, and a browser that drops the cookie still counts once a
+  day rather than once per request.
 
 Browsers only keep cookies for the site that set them, and Safari also caps cookies at 7 days when they are
 written by JavaScript, or set by a server whose IP address doesn't match the site's (a subdomain pointing
@@ -274,7 +283,8 @@ compared by it:
 **The endpoint** answers two requests from the browser, on the same origin as the page:
 
 - `GET /tb/id`: returns `{ "i": ID or null, "c": decision or null }` from its cookies and renews `tb_id`.
-  The script calls it at most once a day per visitor, keeping the answer in memory for the page.
+  Its cookies aren't `HttpOnly`, since the script reads them for each batch; `tb_r` (1 day) marks that the
+  ID was renewed today, so the script calls GET at most once a day.
 - `POST /tb/id` with `{ "analytics": bool, "ads": bool }`: stores the decision in `tb_c`; with `analytics`
   granted it creates `tb_id` (a random ID it generates itself), and with `analytics` refused it deletes it.
   With an empty body it only creates `tb_id`, for regions where consent isn't required.
@@ -303,12 +313,16 @@ Optional, for sites without a CMP. It's a separate file, `/tb/banner.js`, loaded
 must see it, so the core stays within its budget (section 9).
 
 - The snippet carries `data-consent="auto"` when the site uses Tinybeam's banner. A collector in front of
-  the site replaces it with the resolved state (`pending`, `granted`, `denied`, `not_required`), as it does
-  with `data-pv`. Without one, the core asks `GET /tb/c?s=SITE_ID`, which answers with the state. That
-  small request is only made on sites that use the banner or keep the ID in `endpoint` or `script` mode,
-  and only while the visitor has neither an ID nor a decision.
-- If the state is `pending`, the core loads `/tb/banner.js?s=SITE_ID&l=LANG`; the collector serves it with
-  that site's texts in that language.
+  the site replaces it with the resolved state (`pending`, `granted`, `denied`, `not_required`, or `none`
+  when there is nothing to ask), as it does with `data-pv`.
+- The core loads `/tb/banner.js?s=SITE_ID&l=LANG` when the state is `pending`, or, with `auto`, while the
+  visitor has no decision yet (no `tb_c` cookie). The collector decides from the visitor's cookies,
+  country and Global Privacy Control: it answers with the banner and that site's texts in that language,
+  or with an empty script when there is nothing to ask (plus the cookies that say so). That answer depends
+  on the visitor, so it is never cached. A `data-tb-consent` click adds `&f=1` to show it anyway.
+- In `endpoint` and `script` mode the collector can't see the site's cookies, so the script asks
+  `GET /tb/c?s=SITE_ID&u=PAGE&m=e|s` (`{ "c": state }`) while the visitor has neither an ID nor a decision,
+  to know whether to show the banner or create the ID.
 - The banner asks only for what needs consent (returning-visitor cookie, advertising platforms), with
   "Accept" and "Reject" equally prominent and a link to the site's privacy policy. Its text also says that
   visits are counted anonymously and in aggregate either way, so "Reject" doesn't read as "don't count me".
@@ -359,9 +373,9 @@ A batch sent when the page was hidden (with the sections and vitals modules):
 ```
 
 - `wd: 1` is added when `navigator.webdriver` is true (an automated browser; see bot traffic, section 7).
-- `i` (the stable anonymous ID) and `c` (the consent decision, `{ "a": 1, "d": 0 }` for analytics and ads)
-  are added only when the ID is kept by the site's endpoint or by the script (section 5); in `collector`
-  mode the collector reads them from its own cookies. The collector still applies the visitor's region
+- `i` (the stable anonymous ID), `c` (the consent decision, two digits as in `tb_c`) and `is` (`e` endpoint,
+  `s` script) are added only when the ID is kept by the site's endpoint or by the script (section 5); in
+  `collector` mode the collector reads them from its own cookies. The collector still applies the visitor's region
   and Global Privacy Control, and ignores `i` when the resulting state doesn't allow a stable ID.
 - Short keys keep the payload small; the collector expands them.
 - `t` is the client time in ms; the collector also records its own receive time and uses it for ordering.
@@ -556,7 +570,8 @@ collector resolves them for each forwarded event:
 
 | Bundle | Budget (brotli) |
 | --- | --- |
-| Core (including SPA navigation) | 1.5 KB |
+| Core (including SPA navigation and consent) | 1.5 KB |
+| Core + keeping the ID in the page (`tinybeam-ids.js`) | 1.75 KB |
 | Core + sections | 2 KB |
 | Core + all modules | 3 KB |
 

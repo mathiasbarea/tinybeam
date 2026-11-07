@@ -2,7 +2,8 @@
 
 Status: **partly implemented.** Done: the owner account (setup, sign-in, sessions), sites (add, edit,
 pause, delete, snippet) stored in SQL and read by the collector, and first dashboards (overview, events
-with resolved attributes, bots and AI). The rest is a draft. This describes the
+with resolved attributes, bots and AI, filtered by consent state), installation by host with its check, and
+consent settings with the banner's texts per language. The rest is a draft. This describes the
 web portal that comes with the collector. It
 complements [`spec.md`](spec.md), which covers the script, the wire format and the collector.
 
@@ -131,7 +132,7 @@ Per site, with a date range and filters on any dimension:
 1. Configuration in the database and the collector reading it (done for sites; filters next).
 2. Accounts and the portal shell: sign-in, sites, snippet (done for the owner; roles and more users next).
 3. Dashboards over the stored events (first version done: date ranges; filters on any dimension next).
-4. Consent: states recorded per event, region settings, the optional banner.
+4. Consent: states recorded per event, region settings, the optional banner (done).
 5. Transformations.
 6. Destinations, starting with GA4 Measurement Protocol.
 7. Hosted mode: organizations and billing.

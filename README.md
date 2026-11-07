@@ -7,7 +7,7 @@ actually do on a page and sends it to the collector; the collector enriches the 
 forwards them to wherever you want them: your own database, GA4, Meta, or any other destination.
 
 > **Status: early development.** The browser core and the collector are written and tested; the browser
-> modules (sections, Web Vitals), consent and destinations are next. The event and identity model is drafted in
+> modules (sections, Web Vitals) and destinations are next; consent is done. The event and identity model is drafted in
 > [`docs/spec.md`](docs/spec.md). Feedback is welcome in issues.
 
 ## Why
@@ -153,13 +153,14 @@ platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index
 
 | Bundle | Contents | Size (brotli) | Budget |
 | --- | --- | --- | --- |
-| `tinybeam.js` | Core, including History API navigations | 1,214 B | 1,536 B |
+| `tinybeam.js` | Core, including History API navigations and consent | 1,514 B | 1,536 B |
+| `tinybeam-ids.js` | Core plus keeping the ID through the site's endpoint or script cookies | 1,761 B | 1,792 B |
 
 ## Roadmap
 
 1. Spec: events, identity, consent by region, wire format ([`docs/spec.md`](docs/spec.md)).
 2. Browser core (done) and modules (sections, Web Vitals), with a size budget in CI.
-3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent by region with an optional banner.
+3. Portable collector with SQL storage, Node.js and Cloudflare adapters (done); consent by region with an optional banner (done).
 4. The portal, on a URL the owner chooses, with no terminal needed ([`docs/portal.md`](docs/portal.md)):
    owner account, sites and first dashboards (done); roles, filters, transformations and destinations
    next.

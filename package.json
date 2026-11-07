@@ -21,10 +21,12 @@
     ".": "./app.js",
     "./app": "./app.js",
     "./collector": "./collector/index.js",
+    "./collector/endpoint": "./collector/endpoint.js",
     "./collector/node": "./collector/node.js",
     "./collector/cloudflare": "./collector/cloudflare.js",
     "./portal": "./portal/index.js",
-    "./dist/tinybeam.js": "./dist/tinybeam.js"
+    "./dist/tinybeam.js": "./dist/tinybeam.js",
+    "./dist/tinybeam-ids.js": "./dist/tinybeam-ids.js"
   },
   "engines": {
     "node": ">=22.5"
