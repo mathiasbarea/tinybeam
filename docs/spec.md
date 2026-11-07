@@ -16,7 +16,7 @@ This document defines:
 ## 2. Loading
 
 ```html
-<script type="module" src="/tb/tinybeam.js" data-endpoint="/tb/e" async></script>
+<script src="/tb/tinybeam.js" data-endpoint="/tb/e" defer></script>
 ```
 
 - One file per site: the modules the site uses are selected at build time and bundled with the core.
@@ -136,6 +136,13 @@ The collector adds, per event:
 - `engaged_session`: true once a session has more than 10 s of visible time, two page views, or a conversion
   event.
 
+### Server-side page views
+
+When the collector also serves the site's HTML (for example a Cloudflare Worker in front of the site), it
+can log a page view for every HTML request from a non-bot client. These count visitors whose browser never
+ran the script. The script sends the page view ID the server assigned (exposed in the HTML), so the
+collector merges both records instead of counting the visit twice.
+
 ### AI traffic
 
 The collector can also log, without any browser script:
@@ -182,8 +189,17 @@ Destinations are configured in the collector, never in the page:
 | Core + sections | 1.5 KB |
 | Core + all modules | 3 KB |
 
-- Bundles are minified (whitespace, comments, renamed local variables, and mangled internal property names)
-  and target modern browsers only (ES2020, no polyfills or transpiled legacy syntax).
+- Bundles are minified (whitespace, comments, renamed local variables, and mangled internal property names).
+- Old browsers are measured, not dropped. The source sticks to syntax that every browser since 2017 parses
+  (ES2015: no optional chaining, nullish coalescing or class fields), which costs almost nothing in size,
+  and the minifier never emits newer syntax. No polyfills are shipped: each browser API is feature-detected
+  and the script degrades instead of failing:
+  - sending: `navigator.sendBeacon`, then `fetch` with `keepalive`, then `XMLHttpRequest`;
+  - sections: skipped where `IntersectionObserver` is missing;
+  - vitals: each metric is sent only where the browser exposes it (INP, for example, is Chromium-only).
+- Browsers that can't run the script at all (very old ones, or with JavaScript disabled) are still counted:
+  the collector can log page views from the HTML requests themselves (section 7), with the same enrichment
+  and without engagement data.
 - Budgets are measured on the minified bundle compressed with brotli, which is what the browser downloads.
   The uncompressed minified size is reported too, since that is what the browser parses.
 - CI fails if a bundle exceeds its budget.
