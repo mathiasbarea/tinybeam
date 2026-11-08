@@ -44,7 +44,9 @@ them.
 
 The equivalent of a GA4 property. Adding a site takes a name and its origins and returns its ID and the
 snippet to paste (script tag and noscript pixel). A site can be paused (data rejected) or deleted (data
-removed after a grace period).
+removed after a grace period). Each site sets how long its events are kept, in months (24 by default;
+spec, section 7): older ones are deleted automatically, and the page reminds the owner to state the same
+period in the site's privacy policy.
 
 ### Installation
 

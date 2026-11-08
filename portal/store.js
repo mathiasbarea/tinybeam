@@ -1,6 +1,6 @@
 // The portal's configuration (users, sessions, sites) in the same SQL database as the events, through the
 // same driver (collector/storage.js).
-import { newSiteId } from '../collector/index.js';
+import { RETENTION_MONTHS, newSiteId } from '../collector/index.js';
 import { addColumns } from '../collector/storage.js';
 import { hashToken, newToken } from './auth.js';
 
@@ -13,10 +13,11 @@ const SCHEMA = [
 ].join('\n');
 
 // `settings` (JSON) holds the site's consent settings (`consent`, collector/consent.js; missing keys take the
-// defaults) and where it is hosted (`host`, portal/install.js).
+// defaults), where it is hosted (`host`, portal/install.js) and how many months its data is kept
+// (`retention`, collector/index.js).
 const parse = text => { try { return text ? JSON.parse(text) : {}; } catch { return {}; } };
 const siteFromRow = row => row && { id: row.id, name: row.name, origins: JSON.parse(row.origins), paused: Boolean(row.paused), created_at: row.created_at, ...settingsOf(row) };
-const settingsOf = row => { const s = parse(row.settings); return { consent: s.consent || {}, host: s.host || null }; };
+const settingsOf = row => { const s = parse(row.settings); return { consent: s.consent || {}, host: s.host || null, retention: s.retention || RETENTION_MONTHS }; };
 
 export function createStore(driver, { now = Date.now } = {}) {
   let ready;

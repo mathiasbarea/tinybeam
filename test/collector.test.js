@@ -266,12 +266,12 @@ test('the D1 driver batches inserts', async () => {
   const calls = [];
   const db = {
     exec: async sql => calls.push(['exec', sql.includes('CREATE TABLE')]),
-    prepare: sql => ({ bind: (...params) => ({ sql, params }) }),
+    prepare: sql => ({ bind: (...params) => ({ sql, params, run: async () => calls.push(['run', sql.startsWith('DELETE')]) }) }),
     batch: async statements => calls.push(['batch', statements.length]),
   };
   const collector = createCollector({ storage: sqlStorage(d1Driver(db)), sites: SITES });
   await collector.handle(post(batch([{ n: 'a', t: 1, p: {} }, { n: 'b', t: 2, p: {} }])), {});
-  assert.deepEqual(calls, [['exec', true], ...ADDED_COLUMNS.map(() => ['exec', false]), ['batch', 2]], 'creates the table, adds newer columns to older tables, then batches');
+  assert.deepEqual(calls, [['exec', true], ...ADDED_COLUMNS.map(() => ['exec', false]), ['batch', 2], ['run', true]], 'creates the table, adds newer columns to older tables, batches, then deletes what is past retention');
 });
 
 test('the Cloudflare context comes from request.cf', () => {
@@ -298,4 +298,28 @@ test('the Node.js adapter serves the collector over HTTP', async () => {
   } finally {
     server.close();
   }
+});
+
+test('records older than the site\'s retention are deleted, at most once a day per site', async () => {
+  const sites = [{ id: 'site1', origins: ['https://example.com'] }, { id: 'site2', origins: ['https://two.example'], retention: 1 }];
+  const { collector, records, advance } = setup({ sites });
+  const send = (site, origin) => collector.handle(new Request(`${origin}/tb/e`, { method: 'POST', body: JSON.stringify({ v: 1, s: site, u: `${origin}/`, e: [{ n: 'x', t: 1, p: {} }] }) }), {});
+  await send('site1', 'https://example.com');
+  await send('site2', 'https://two.example');
+  advance(40 * 864e5); // past site2's month: the next write a day later prunes it
+  await send('site2', 'https://two.example');
+  assert.deepEqual(records.map(r => r.site), ['site1', 'site2'], 'site2\'s old record deleted, site1 keeps 24 months');
+  await send('site1', 'https://example.com');
+  assert.equal(records.length, 3);
+  advance(700 * 864e5); // site1's first record is now 740 days old: past 24 months
+  await send('site1', 'https://example.com');
+  assert.deepEqual(records.map(r => r.site), ['site2', 'site1', 'site1'], 'only site1 is pruned: site2 recorded nothing since');
+});
+
+test('SQL storage prunes by site and time', async () => {
+  const driver = await (await import('../collector/node.js')).sqliteDriver(':memory:');
+  const storage = sqlStorage(driver);
+  await storage.write([{ site: 'a', received_at: 1 }, { site: 'a', received_at: 5 }, { site: 'b', received_at: 1 }]);
+  await storage.prune('a', 3);
+  assert.deepEqual(driver.all('SELECT site, received_at FROM tinybeam_events ORDER BY site', []).map(r => [r.site, r.received_at]), [['a', 5], ['b', 1]]);
 });

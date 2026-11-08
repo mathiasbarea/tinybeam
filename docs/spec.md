@@ -419,6 +419,14 @@ the `Origin` header when the browser sends one; anything else gets `403`. The no
 `?s=`, and `observe` takes it as `context.site`. Responses allow those origins through CORS, so
 a collector on another domain works too.
 
+### Data retention
+
+A site's records are kept for 24 months by default (`RETENTION_MONTHS`), and each site can set its own
+period (`site.retention`, in months; the collector's `retention` option changes the default). Older records
+are deleted by the collector itself, at most once a day per site, after it stores something for that site,
+so no scheduled job is needed. A storage that can't delete (no `prune(site, before)`) keeps everything.
+The site's privacy policy should state the same period.
+
 ### Enrichment
 
 The collector adds, per event:

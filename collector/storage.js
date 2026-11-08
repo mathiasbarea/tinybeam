@@ -71,7 +71,13 @@ export async function addColumns(driver, table, columns) {
 // Keeps records in an array. For tests and trying things out.
 export function memoryStorage() {
   const records = [];
-  return { records, write: async batch => { records.push(...batch); } };
+  return {
+    records,
+    write: async batch => { records.push(...batch); },
+    prune: async (site, before) => {
+      for (let i = records.length - 1; i >= 0; i--) if (records[i].site === site && records[i].received_at < before) records.splice(i, 1);
+    },
+  };
 }
 
 const toRow = record => Object.keys(COLUMNS).map(key => {
@@ -105,6 +111,11 @@ export function sqlStorage(driver, { table = 'tinybeam_events' } = {}) {
       await init();
       if (driver.batch) await driver.batch(insert, batch.map(toRow));
       else for (const record of batch) await driver.run(insert, toRow(record));
+    },
+    // Deletes a site's records received before `before` (ms since epoch): data retention.
+    async prune(site, before) {
+      await init();
+      await driver.run(`DELETE FROM ${table} WHERE site = ? AND received_at < ?`, [site, before]);
     },
   };
 }

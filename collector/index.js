@@ -10,6 +10,9 @@ import { COOKIE_AGE, consentSettings, consentState, cookieHeader, formatDecision
 import { campaign, classifyReferrer, geoFromHeaders, parseUserAgent } from './enrich.js';
 import { memoryStorage } from './storage.js';
 
+// Months a site's records are kept by default (docs/spec.md, section 7, Data retention).
+export const RETENTION_MONTHS = 24;
+
 const DEFAULTS = {
   path: '/tb', // the script posts to `${path}/e`; the noscript pixel is `${path}/n`
   searchParams: ['q', 's', 'query'],
@@ -23,7 +26,12 @@ const DEFAULTS = {
   // bundles by file name ({ 'tinybeam.js': code, 'tinybeam-ids.js': code }).
   script: null,
   secureCookies: true, // the visitor cookies (consent, stable ID) carry Secure; off only for plain-HTTP testing
+  // Months a site's records are kept, unless the site sets its own (`site.retention`). Older ones are
+  // deleted about once a day, when the site records something.
+  retention: RETENTION_MONTHS,
 };
+
+const MONTH = 30.4375 * 864e5;
 
 const GIF = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), c => c.charCodeAt(0));
 
@@ -210,9 +218,21 @@ export function createCollector(options = {}) {
     };
   };
 
+  // Data retention: at most once a day per site, delete what is older than the site's retention.
+  const pruned = new Map(); // site ID -> when its old records were last deleted
+  const prune = async id => {
+    const time = now();
+    if (!storage.prune || !id || time - (pruned.get(id) || 0) < 864e5) return;
+    pruned.set(id, time);
+    const site = await findSite(id);
+    await storage.prune(id, time - ((site && site.retention) || config.retention) * MONTH);
+  };
+
   const store = (records, context) => {
     if (!records.length) return;
-    const done = Promise.resolve(storage.write(records)).catch(error => console.error('tinybeam: storage write failed', error));
+    const done = Promise.resolve(storage.write(records))
+      .catch(error => console.error('tinybeam: storage write failed', error))
+      .then(() => prune(records[0].site).catch(error => console.error('tinybeam: deleting old records failed', error)));
     // Where the platform can finish work after responding, the response doesn't wait for storage.
     if (context.waitUntil) context.waitUntil(done);
     else return done;

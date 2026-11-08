@@ -203,3 +203,14 @@ test('with a setup token, only the setup link can create the owner account', asy
   assert.equal((await send('/portal/setup', { email: 'a@b.co', password: PASSWORD, token: 'link-token-123' })).status, 303);
   assert.equal((await send('/portal/setup?token=link-token-123')).headers.get('location'), '/portal/login', 'closed once the owner exists');
 });
+
+test('data retention is 24 months by default and can be changed per site', async () => {
+  const { app, request, text } = await signedIn();
+  const id = await addSite(request);
+  assert.equal((await app.store.getSite(id)).retention, 24);
+  assert.match(await text(await request(`/portal/sites/${id}/settings`)), /name="months"[^>]*value="24"/);
+  assert.equal((await request(`/portal/sites/${id}/retention`, { form: { months: '0' } })).status, 400);
+  assert.equal((await request(`/portal/sites/${id}/retention`, { form: { months: '12.5' } })).status, 400);
+  await request(`/portal/sites/${id}/retention`, { form: { months: '48' } });
+  assert.equal((await app.store.getSite(id)).retention, 48);
+});

@@ -121,6 +121,13 @@ ${raw(check ? html`<p class="${check.ok === false ? 'error' : 'note'}">${check.t
     ['full', 'Never ask: full measurement everywhere'],
   ];
   const options = (list, current) => list.map(([value, label]) => html`<option value="${value}" ${raw(value === current ? 'selected' : '')}>${label}</option>`).join('');
+  const retentionForm = (site, error) => html`
+${raw(error ? html`<p class="error">${error}</p>` : '')}
+<form method="post" action="${url(`/sites/${site.id}/retention`)}" class="card">
+<label for="months">Keep events for (months)</label><input id="months" name="months" type="number" min="1" max="120" step="1" required value="${site.retention}">
+<p class="muted">Older events are deleted automatically, about once a day. Your privacy policy should state the same period.</p>
+<button>Save</button></form>`;
+
   const consentForm = (site, error) => {
     const c = consentSettings(site);
     const languages = bannerLanguages(c).map(l => [l, l]);
@@ -281,7 +288,7 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
       return redirect(`/sites/${site.id}/settings`);
     }
 
-    const match = path.match(/^\/sites\/([a-z0-9]+)(?:\/(settings|delete|bots|install|consent|banner|events\/([\w.:-]+)))?$/);
+    const match = path.match(/^\/sites\/([a-z0-9]+)(?:\/(settings|delete|bots|install|consent|retention|banner|events\/([\w.:-]+)))?$/);
     if (match) {
       const site = await store.getSite(match[1]);
       if (!site) return page('Not found', '<h1>Site not found</h1>', user, 404);
@@ -299,6 +306,15 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
         if (!post) return redirect(`${base}/settings`);
         const { host = '' } = await form(request);
         await store.updateSettings(site.id, { host: HOSTS.some(h => h.key === host) ? host : null });
+        return redirect(`${base}/settings`);
+      }
+      if (section === 'retention') {
+        if (!post) return redirect(`${base}/settings`);
+        const months = Number((await form(request)).months);
+        if (!Number.isInteger(months) || months < 1 || months > 120) {
+          return page(site.name, html`${raw(siteHeader(site, 'settings'))}<h2>Data retention</h2>${raw(retentionForm(site, 'Use a whole number of months between 1 and 120.'))}`, user, 400, {}, true);
+        }
+        await store.updateSettings(site.id, { retention: months });
         return redirect(`${base}/settings`);
       }
       if (section === 'consent') {
@@ -341,6 +357,7 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
 <p class="muted">Site ID <code>${site.id}</code></p>
 ${raw(install(site, site.host, origin, check))}
 <h2>Consent</h2>${raw(consentForm(site))}
+<h2>Data retention</h2>${raw(retentionForm(site))}
 <h2>Settings</h2>${raw(siteForm(`${base}/settings`, site))}
 <h2>Delete</h2>
 <form method="post" action="${url(`${base}/delete`)}" class="card">
