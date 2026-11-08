@@ -52,7 +52,7 @@ const RANGES = { '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5, '90d': 90 * 8
 const number = n => (n == null ? '–' : Number(n).toLocaleString('en-US'));
 const duration = ms => (ms == null ? '–' : ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`);
 
-export function createPortal({ store, queries, basePath = '/portal', collectorPath = '/tb', secureCookies = true, now = Date.now }) {
+export function createPortal({ store, queries, basePath = '/portal', collectorPath = '/tb', secureCookies = true, setupToken = null, now = Date.now }) {
   const COOKIE = 'tb_session';
   const url = path => basePath + path;
   const failures = new Map(); // email -> { count, until }: slows down password guessing
@@ -78,10 +78,11 @@ export function createPortal({ store, queries, basePath = '/portal', collectorPa
 
   const form = async request => Object.fromEntries(await request.formData());
 
-  const authForm = (title, action, intro, error, email = '') => html`
+  const authForm = (title, action, intro, error, email = '', token = '') => html`
 <h1>${title}</h1><p class="muted">${intro}</p>
 ${raw(error ? html`<p class="error">${error}</p>` : '')}
 <form method="post" action="${url(action)}" class="card">
+${raw(token ? html`<input type="hidden" name="token" value="${token}">` : '')}
 <label for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required value="${email}">
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${action === '/setup' ? 'new-password' : 'current-password'}" minlength="${action === '/setup' ? 12 : 1}" required>
 <button>${title}</button></form>`;
@@ -213,14 +214,20 @@ ${raw(TEXT_KEYS.map(key => key === 'body'
     const post = request.method === 'POST';
     if (post && !sameOrigin(request)) return new Response('Forbidden', { status: 403 });
 
-    // First run: create the owner account. Closed once any user exists.
+    // First run: create the owner account. Closed once any user exists. With `setupToken`, only whoever has
+    // the setup link (?token=…) can create it, so a fresh public deployment can't be claimed by someone else.
     if (path === '/setup') {
       if (await store.hasUsers()) return redirect('/login');
       const intro = 'Create the owner account for this Tinybeam installation.';
-      if (!post) return page('Set up', authForm('Create account', '/setup', intro));
-      const { email = '', password = '' } = await form(request);
+      const fields = post ? await form(request) : {};
+      const token = String((post ? fields.token : searchParams.get('token')) || '');
+      if (setupToken && token !== setupToken) {
+        return page('Set up', '<h1>Set up</h1><p class="muted">Open the setup link of this installation, with its token, to create the owner account.</p>', null, 403);
+      }
+      if (!post) return page('Set up', authForm('Create account', '/setup', intro, null, '', token));
+      const { email = '', password = '' } = fields;
       if (!email.includes('@') || password.length < 12) {
-        return page('Set up', authForm('Create account', '/setup', intro, 'Use a valid email and a password of at least 12 characters.', email), null, 400);
+        return page('Set up', authForm('Create account', '/setup', intro, 'Use a valid email and a password of at least 12 characters.', email, token), null, 400);
       }
       const user = await store.createUser(email.trim().toLowerCase(), await hashPassword(password));
       const session = await store.createSession(user.id);

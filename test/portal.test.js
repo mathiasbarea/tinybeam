@@ -191,3 +191,15 @@ test('banner texts can be edited per language, and new languages added', async (
   assert.match(preview, />Rechazar</);
   assert.match(preview, /href="\/portal\/sites\/[a-z0-9]+\/banner\?lang=ja"/, 'the added language is listed');
 });
+
+test('with a setup token, only the setup link can create the owner account', async () => {
+  const driver = await sqliteDriver(':memory:');
+  const app = createTinybeam({ driver, script: '', setupToken: 'link-token-123' });
+  const send = (path, form) => app.handle(new Request(ORIGIN + path, form ? { method: 'POST', body: new URLSearchParams(form), headers: { origin: ORIGIN } } : {}));
+  assert.equal((await send('/portal/setup')).status, 403);
+  assert.equal((await send('/portal/setup', { email: 'a@b.co', password: PASSWORD })).status, 403);
+  assert.equal((await send('/portal/setup', { email: 'a@b.co', password: PASSWORD, token: 'wrong' })).status, 403);
+  assert.match(await (await send('/portal/setup?token=link-token-123')).text(), /name="token" value="link-token-123"/);
+  assert.equal((await send('/portal/setup', { email: 'a@b.co', password: PASSWORD, token: 'link-token-123' })).status, 303);
+  assert.equal((await send('/portal/setup?token=link-token-123')).headers.get('location'), '/portal/login', 'closed once the owner exists');
+});

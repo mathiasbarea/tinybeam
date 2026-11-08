@@ -9,6 +9,7 @@
     "build": "node build.mjs",
     "size": "node build.mjs --check",
     "test": "node --test",
+    "prepare": "node build.mjs",
     "site-id": "node --input-type=module -e \"import { newSiteId } from './collector/index.js'; console.log(newSiteId())\"",
     "start": "node build.mjs && node examples/node-server.js"
   },

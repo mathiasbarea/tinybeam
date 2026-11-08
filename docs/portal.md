@@ -31,7 +31,9 @@ them.
 
 ## Accounts and access
 
-- First run: a setup page creates the owner account. No default passwords.
+- First run: a setup page creates the owner account. No default passwords. A public deployment can set
+  `setupToken` (for example from a secret), so only whoever has the setup link (`/portal/setup?token=…`)
+  can create it.
 - Sign-in with email and password (hashed with a slow KDF), sessions in an `HttpOnly` cookie, optional
   passkeys later.
 - Roles per site: owner, admin (configuration), viewer (dashboards only).
