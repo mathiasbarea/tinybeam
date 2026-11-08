@@ -215,14 +215,14 @@ test('tables from before consent get the new columns', async () => {
 
 test('the banner\'s buttons send the decision through tinybeam.consent, and it goes away', async () => {
   const { JSDOM } = await import('jsdom');
-  const run = () => {
+  const run = (settings = {}) => {
     const dom = new JSDOM('<!doctype html><body></body>', { runScripts: 'outside-only' });
     const calls = [];
     dom.window.tinybeam = { consent: c => calls.push({ ...c }) }; // copied out of the page's realm
-    dom.window.eval(renderBanner({ ...CONSENT_DEFAULTS, position: 'bottom-left' }, 'en'));
+    dom.window.eval(renderBanner({ ...CONSENT_DEFAULTS, position: 'bottom-left', ...settings }, 'en'));
     const box = dom.window.document.getElementById('tb-consent');
     const buttons = [...box.querySelectorAll('button')];
-    return { dom, calls, box, buttons };
+    return { dom, calls, box, buttons, text: box.textContent };
   };
   const reject = run();
   assert.deepEqual(reject.buttons.map(b => b.textContent), ['Reject', 'Choose', 'Accept'], 'reject as prominent as accept, first');
@@ -239,5 +239,14 @@ test('the banner\'s buttons send the decision through tinybeam.consent, and it g
 
   const accept = run();
   accept.buttons[2].click();
-  assert.deepEqual(accept.calls, [{ analytics: true, ads: true, source: 'banner' }]);
+  assert.deepEqual(accept.calls, [{ analytics: true, ads: false, source: 'banner' }], 'no advertising unless the site asks about it');
+  assert.doesNotMatch(accept.text, /advertising/);
+  assert.equal(accept.box.querySelectorAll('input').length, 1);
+
+  // A site that forwards to advertising platforms asks about it too.
+  const ads = run({ ads: true });
+  assert.match(ads.text, /advertising platforms/);
+  assert.equal(ads.box.querySelectorAll('input').length, 2);
+  ads.buttons[2].click();
+  assert.deepEqual(ads.calls, [{ analytics: true, ads: true, source: 'banner' }]);
 });

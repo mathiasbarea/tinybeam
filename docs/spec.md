@@ -323,7 +323,9 @@ must see it, so the core stays within its budget (section 9).
 - In `endpoint` and `script` mode the collector can't see the site's cookies, so the script asks
   `GET /tb/c?s=SITE_ID&u=PAGE&m=e|s` (`{ "c": state }`) while the visitor has neither an ID nor a decision,
   to know whether to show the banner or create the ID.
-- The banner asks only for what needs consent (returning-visitor cookie, advertising platforms), with
+- The banner asks only for what needs consent: the returning-visitor cookie, and advertising platforms
+  only when the site turns that on (consent setting `ads`, off by default; for sites that forward to
+  advertising destinations, section 8; otherwise "Accept" grants analytics only), with
   "Accept" and "Reject" equally prominent and a link to the site's privacy policy. Its text also says that
   visits are counted anonymously and in aggregate either way, so "Reject" doesn't read as "don't count me".
 - Language (`LANG`): by default the page's language (`<html lang>`), then the visitor's browser language

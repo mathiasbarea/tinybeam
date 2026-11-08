@@ -140,6 +140,8 @@ ${raw(error ? html`<p class="error">${error}</p>` : '')}
 <label for="onRefusal">When a visitor refuses</label><select id="onRefusal" name="onRefusal">${raw(options([['count', 'Count their visits without any identifier'], ['drop', 'Don\'t measure them (only the refusal is recorded)']], c.onRefusal))}</select>
 <label><input type="checkbox" name="banner" value="1" style="width:auto" ${raw(c.banner ? 'checked' : '')}> Use Tinybeam's banner</label>
 <p class="note">Without it, the site's own consent banner calls <code>tinybeam.consent(true | false)</code>. Changing this changes the snippet above.</p>
+<label><input type="checkbox" name="ads" value="1" style="width:auto" ${raw(c.ads ? 'checked' : '')}> Also ask about advertising</label>
+<p class="note">Only when the site sends data to advertising platforms. Without it, the banner only asks about the analytics cookie.</p>
 <label for="bannerLanguage">Banner language</label><select id="bannerLanguage" name="bannerLanguage">${raw(options([['auto', 'Follow the page (or the visitor\'s browser)'], ...languages], c.bannerLanguage || 'auto'))}</select>
 <label for="defaultLanguage">Default language</label><select id="defaultLanguage" name="defaultLanguage">${raw(options(languages, c.defaultLanguage || 'en'))}</select>
 <label for="privacy">Privacy policy links</label>
@@ -167,6 +169,7 @@ ${raw(error ? html`<p class="error">${error}</p>` : '')}
       regions: regions.length ? [...new Set(regions)] : CONSENT_REGIONS,
       onRefusal: pick(fields.onRefusal, ['count', 'drop'], 'count'),
       banner: fields.banner === '1',
+      ads: fields.ads === '1',
       bannerLanguage: /^(auto|[a-z]{2,3}(-[a-z0-9]{2,8})?)$/.test(fields.bannerLanguage || '') ? fields.bannerLanguage : 'auto',
       defaultLanguage: /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(fields.defaultLanguage || '') ? fields.defaultLanguage : 'en',
       privacy,
@@ -181,14 +184,14 @@ ${raw(error ? html`<p class="error">${error}</p>` : '')}
     const own = (c.texts || {})[lang] || {};
     const builtIn = { ...BANNER_TEXTS.en, ...(BANNER_TEXTS[lang] || BANNER_TEXTS[lang.split('-')[0]] || {}) };
     const t = bannerTexts(c, lang);
-    const labels = { title: 'Title', body: 'Text', accept: 'Accept button', reject: 'Reject button', customize: 'Choose button', save: 'Save button', analytics: 'Returning-visitor option', ads: 'Advertising option', privacy: 'Privacy policy link' };
+    const labels = { title: 'Title', body: 'Text', bodyAds: 'Text when asking about advertising', accept: 'Accept button', reject: 'Reject button', customize: 'Choose button', save: 'Save button', analytics: 'Returning-visitor option', ads: 'Advertising option', privacy: 'Privacy policy link' };
     const base = `/sites/${site.id}/banner`;
     return html`${raw(siteHeader(site, 'settings'))}
 <h2>Banner texts</h2>
 <p class="ranges">${raw(bannerLanguages(c).map(l => html`<a class="${l === lang ? 'on' : ''}" href="${url(base)}?lang=${l}">${l}</a>`).join(''))}</p>
 <form method="get" action="${url(base)}" class="card" style="display:flex;gap:8px;align-items:flex-end"><div style="flex:1"><label for="lang">Add a language</label><input id="lang" name="lang" placeholder="ja" pattern="[a-z]{2,3}(-[a-z0-9]{2,8})?" required></div><button>Add</button></form>
 <form method="post" action="${url(base)}" class="card"><input type="hidden" name="lang" value="${lang}">
-${raw(TEXT_KEYS.map(key => key === 'body'
+${raw(TEXT_KEYS.map(key => key.startsWith('body')
     ? html`<label for="t-${key}">${labels[key]}</label><textarea id="t-${key}" name="${key}" rows="4" maxlength="600" placeholder="${builtIn[key]}">${own[key] || ''}</textarea>`
     : html`<label for="t-${key}">${labels[key]}</label><input id="t-${key}" name="${key}" maxlength="120" placeholder="${builtIn[key]}" value="${own[key] || ''}">`).join(''))}
 <p class="note">Empty fields use the ${BANNER_TEXTS[lang] || BANNER_TEXTS[lang.split('-')[0]] ? 'built-in translation' : 'English text'} shown in grey. Keep "Reject" as easy to find as "Accept", and keep the sentence saying visits are counted anonymously either way.</p>
@@ -331,7 +334,7 @@ ${raw(sites.length ? html`<div class="card"><table><tr><th>Name</th><th>Origins<
           if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(lang)) return redirect(`${base}/banner`);
           const own = {};
           for (const key of TEXT_KEYS) {
-            const value = String(fields[key] || '').trim().slice(0, key === 'body' ? 600 : 120);
+            const value = String(fields[key] || '').trim().slice(0, key.startsWith('body') ? 600 : 120);
             if (value) own[key] = value;
           }
           const texts = { ...(site.consent.texts || {}) };

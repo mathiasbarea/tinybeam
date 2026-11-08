@@ -10,7 +10,7 @@ export const CONSENT_REGIONS = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 
 // mode: `region` (ask where `regions` require it), `all` (ask everyone), `anonymous` (never ask, never a
 // stable ID) or `full` (never ask, stable ID everywhere). onRefusal: `count` (without an identifier) or
 // `drop`. banner: whether the site uses Tinybeam's banner (otherwise its own, through tinybeam.consent).
-export const CONSENT_DEFAULTS = { mode: 'region', regions: CONSENT_REGIONS, onRefusal: 'count', banner: false };
+export const CONSENT_DEFAULTS = { mode: 'region', regions: CONSENT_REGIONS, onRefusal: 'count', banner: false, ads: false };
 
 export const consentSettings = site => ({ ...CONSENT_DEFAULTS, ...((site && site.consent) || {}) });
 

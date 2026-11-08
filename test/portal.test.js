@@ -169,7 +169,7 @@ test('consent settings are saved, validated, and change the snippet when the ban
   assert.match(await text(bad), /&quot;FRA&quot; is not a two-letter country code/);
   await request(`/portal/sites/${id}/consent`, { form: { mode: 'all', regions: 'de, fr br', onRefusal: 'drop', banner: '1', bannerLanguage: 'auto', defaultLanguage: 'es', privacy: 'es https://example.com/privacidad', position: 'bottom-left', color: '#ff0000' } });
   const site = await app.store.getSite(id);
-  assert.deepEqual(site.consent, { mode: 'all', regions: ['DE', 'FR', 'BR'], onRefusal: 'drop', banner: true, bannerLanguage: 'auto', defaultLanguage: 'es', privacy: { es: 'https://example.com/privacidad' }, position: 'bottom-left', color: '#ff0000' });
+  assert.deepEqual(site.consent, { mode: 'all', regions: ['DE', 'FR', 'BR'], onRefusal: 'drop', banner: true, ads: false, bannerLanguage: 'auto', defaultLanguage: 'es', privacy: { es: 'https://example.com/privacidad' }, position: 'bottom-left', color: '#ff0000' });
   assert.match(await text(await request(`/portal/sites/${id}/settings`)), /data-consent=&quot;auto&quot;/);
 
   // The collector reads the new settings: everyone is asked now, even in the US.
