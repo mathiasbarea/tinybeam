@@ -5,6 +5,7 @@
   "description": "First-party web analytics that weighs almost nothing: a tiny browser script and a portable collector.",
   "license": "MIT",
   "type": "module",
+  "files": ["app.js", "build.mjs", "collector", "portal", "src", "dist", "examples", "docs"],
   "scripts": {
     "build": "node build.mjs",
     "size": "node build.mjs --check",
