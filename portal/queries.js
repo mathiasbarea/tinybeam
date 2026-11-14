@@ -48,7 +48,8 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
     return { views: merged.filter(v => v.source !== 'server'), unconfirmed: merged.filter(v => v.source === 'server'), truncated };
   }
 
-  async function overview(site, from, to, filter) {
+  // `bucket` (ms, optional): also return `series`, visitors and page views per bucket, aligned to UTC.
+  async function overview(site, from, to, filter, { bucket = 0 } = {}) {
     const [where, params] = scope(site, from, to, filter);
     const { views, unconfirmed, truncated } = await pageViews(site, from, to, filter);
     // Bots aren't filtered by consent, so neither are the unconfirmed page views counted with them.
@@ -77,6 +78,17 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
       if (v.aid) visitors.add(v.aid);
       if (v.aid && v.id_store) stableVisitors.add(v.aid);
       if (v.sid) sessions.add(v.sid);
+    }
+    const series = [];
+    if (bucket > 0) {
+      const start = Math.floor(from / bucket) * bucket;
+      for (let at = start; at < to; at += bucket) series.push({ start: at, pageViews: 0, ids: new Set() });
+      for (const v of views) {
+        const slot = series[Math.floor((Number(v.received_at) - start) / bucket)];
+        if (!slot) continue;
+        slot.pageViews += 1;
+        if (v.aid) slot.ids.add(v.aid);
+      }
     }
     const engagement = await rows(`SELECT pv, props FROM $t WHERE ${where} AND kind = 'event' AND traffic = 'human' AND name = 'engagement' LIMIT ${limit + 1}`, params);
     const time = new Map();
@@ -108,6 +120,7 @@ export function createQueries(driver, { table = 'tinybeam_events', limit = 100_0
       js: top(dims.js), scrollDepth: [...depth].map(([key, value]) => ({ key: `${key}%`, value })), scrolledPageViews: scroll.size,
       events: events.map(e => ({ key: e.name, value: Number(e.n) })),
       consent: top(dims.consent), consentSessions: top(dims.consentSessions),
+      series: series.map(s => ({ start: s.start, pageViews: s.pageViews, visitors: s.ids.size })),
     };
   }
 
