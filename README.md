@@ -6,7 +6,8 @@ Tinybeam is a tiny browser script plus a collector you can run anywhere. The scr
 actually do on a page and sends it to the collector; the collector enriches the events, stores them and
 forwards them to wherever you want them: your own database, GA4, Meta, or any other destination.
 
-> **Status: early development.** The browser core and the collector are written and tested; the browser
+> **Status: early development, running in production on [mathiasbarea.com](https://mathiasbarea.com).** The browser core
+> and the collector are written and tested; the browser
 > modules (sections, Web Vitals) and destinations are next; consent is done. The event and identity model is drafted in
 > [`docs/spec.md`](docs/spec.md). Feedback is welcome in issues.
 
@@ -165,7 +166,7 @@ platform adapters `node.js` and `cloudflare.js`. The portal is `portal/`: `index
    owner account, sites and first dashboards (done); roles, filters, transformations and destinations
    next.
 5. First destinations: GA4 Measurement Protocol and Meta Conversions API.
-6. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com).
+6. Dogfooding on [mathiasbarea.com](https://mathiasbarea.com) (done: core, collector on Cloudflare, consent and portal).
 7. A hosted service running the same portal and collector, for sites that don't want to run one.
 
 ## License
