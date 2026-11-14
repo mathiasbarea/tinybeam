@@ -38,6 +38,9 @@ async function seeded() {
   await send(IPHONE, '2.2.2.2', { u: 'https://example.com/pricing/', pv: 'b1', e: [{ n: 'page_view', t: 1, p: { title: 'Pricing', ref: 'https://www.google.com/' } }] });
   // Visitor C without JavaScript (noscript pixel).
   await app.handle(new Request(`https://example.com/tb/n?s=${site.id}`, { headers: { referer: 'https://example.com/about/', 'user-agent': CHROME } }), { ip: '3.3.3.3', country: 'AR' });
+  // A browser-looking client the server served twice, that never ran the script nor loaded the pixel.
+  await app.collector.observe(page('/', CHROME), html(), { site: site.id, ip: '8.8.8.8', country: 'SG', pv: 'x1' });
+  await app.collector.observe(page('/pricing/', CHROME), html(), { site: site.id, ip: '8.8.8.8', country: 'SG', pv: 'x2' });
   // Bots.
   for (const [path, ua] of [['/', 'Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)'], ['/llms.txt', 'Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)'], ['/', 'facebookexternalhit/1.1']]) {
     await app.collector.observe(page(path, ua), html(), { site: site.id, ip: '9.9.9.9' });
@@ -51,7 +54,11 @@ test('the overview merges server and script page views and counts each visitor a
   const { app, site } = await seeded();
   const queries = app.portal.queries;
   const data = await queries.overview(site.id, Date.now() - DAY, Date.now() + DAY);
-  assert.deepEqual(data.totals, { pageViews: 4, visitors: 3, stableVisitors: 3, sessions: 3, avgVisibleMs: 20_000, timedPageViews: 2, bots: 3 });
+  // The two page views only the server saw are not visitors: they count with the bots.
+  assert.deepEqual(data.totals, { pageViews: 4, visitors: 3, stableVisitors: 3, sessions: 3, avgVisibleMs: 20_000, timedPageViews: 2, bots: 5, unconfirmed: 2 });
+  assert.equal(data.countries.find(r => r.key === 'SG'), undefined);
+  const filtered = await queries.overview(site.id, Date.now() - DAY, Date.now() + DAY, { consent: 'denied' });
+  assert.equal(filtered.totals.bots, 5, 'bots are not filtered by consent');
   assert.deepEqual(data.pages, [{ key: '/pricing/', value: 2 }, { key: '/', value: 1 }, { key: '/about/', value: 1 }]);
   assert.deepEqual(Object.fromEntries(data.referrerTypes.map(r => [r.key, r.value])), { ai_assistant: 1, search: 1, direct: 1 });
   assert.deepEqual(data.campaigns, [{ key: 'news / launch', value: 1 }]);
@@ -75,8 +82,10 @@ test('event breakdowns include page, session and user attributes, even when set 
 test('bots are counted apart, by category and name, with special files', async () => {
   const { app, site } = await seeded();
   const data = await app.portal.queries.bots(site.id, Date.now() - DAY, Date.now() + DAY);
-  assert.equal(data.total, 3);
-  assert.deepEqual(Object.fromEntries(data.categories.map(r => [r.key, r.value])), { ai_training: 2, social_preview: 1 });
+  assert.equal(data.total, 5);
+  assert.deepEqual(Object.fromEntries(data.categories.map(r => [r.key, r.value])), { ai_training: 2, other: 2, social_preview: 1 });
+  assert.deepEqual(data.bots.find(b => b.category === 'other'), { key: 'Other (never ran the script)', category: 'other', value: 2, last: data.bots.find(b => b.category === 'other').last });
+  assert.ok(data.paths.some(p => p.key === '/pricing/'), 'their paths join the most requested');
   assert.deepEqual(data.specialFiles, [{ key: 'llms.txt · GPTBot', value: 1 }]);
   assert.deepEqual(data.aiReferrals, [{ key: 'chatgpt.com', value: 1 }]);
 });

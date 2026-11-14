@@ -70,7 +70,7 @@ Tinybeam takes the opposite approach:
 | Context | Device, browser, OS, country, region | Collector |
 | Sessions | Sessions, new vs. returning (with consent), engaged sessions | Collector |
 | Coverage | Which browser features were available, so gaps are counted instead of hidden | Browser (core) |
-| Visits without JavaScript | Page views from the HTML requests themselves and a noscript pixel | Collector |
+| Visits without JavaScript | Page views from a noscript pixel. HTML requests that look like a browser but never run the script nor load the pixel are counted as bots ("other"), not visitors | Collector |
 | Bot traffic | Every identifiable bot by name and category (search, AI crawlers, social previews, SEO tools…), verified where possible, plus unidentified bots. Kept apart from human traffic and not forwarded to destinations unless you opt in | Collector |
 | AI referrals | Visits referred by AI assistants (ChatGPT, Perplexity, Gemini…) | Collector |
 
@@ -114,7 +114,7 @@ Other ways to run it, same code:
 
 - **In front of your site** (Cloudflare Worker, or any server that sees your page requests):
   [`examples/cloudflare-worker.js`](examples/cloudflare-worker.js). Besides the script's events it records
-  server-side page views (visits whose browser never ran the script) and every bot request.
+  every bot request, including the ones that look like a browser but never run the script.
 - **Inside your own server**: `createTinybeam({ driver }).handle(request, context)` takes a standard
   `Request` and returns a `Response`, so it mounts in any framework that speaks web-standard requests
   (Hono, Next.js route handlers, Remix, SvelteKit, Deno, Bun…). The Node.js adapter (`fromNode`, `toNode`)

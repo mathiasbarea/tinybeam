@@ -464,6 +464,12 @@ From those, each page view gets `js`:
 - `unknown`: the server saw the request but neither the script nor the pixel reported (the visitor left
   before the script ran, the script was blocked or failed, or images were off too).
 
+Reports don't count `unknown` page views as people. In practice almost all of them are bots whose user
+agent looks like a browser: on the first site measured, 1,014 of 1,060 browser-looking page views in a
+week never ran the script, from data-center countries, against 46 that did. They are shown with the bots,
+as the category `other`, and the rare person lost with them (who left before the script ran) is the
+price of not inflating visitors twenty times.
+
 When the collector serves the HTML it adds the page view ID to the script tag (streaming, with
 `HTMLRewriter` on Cloudflare), so the script's events merge into the server's record instead of counting
 the visit twice. Without it, records are matched by anonymous ID, URL and time.
@@ -618,7 +624,8 @@ Settled during review (2026-11-07):
    `vitals`, `outbound`, `download`).
 6. **Missing data is explicit.** Every measurement is measured, no value, unsupported or not instrumented,
    and every aggregate reports its base (section 3).
-7. **Visits without JavaScript count**, through server-side page views and a noscript pixel (section 7).
+7. **Visits without JavaScript count**, through the noscript pixel; server-side page views that nothing in
+   a browser confirmed count as bots, not people (section 7).
 8. **Bots are measured separately**, classified by name and category with verification where possible,
    excluded from human reports and from destinations unless opted in (sections 7 and 8).
 9. **Core budget is 1.5 KB** and SPA navigation is part of the core, not a separate bundle: one script fits

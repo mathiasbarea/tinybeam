@@ -394,7 +394,7 @@ ${raw(card('Most requested paths', bars(data.paths)))}
 ${raw(card('Special files', bars(data.specialFiles)))}
 ${raw(card('Visits referred by AI assistants', bars(data.aiReferrals)))}
 </div>
-<p class="note">Bots are seen when a collector is in front of the site (every request) or when they run the script. Verified means the platform confirmed the bot's identity; the others are identified by user agent only. Special files are robots.txt, sitemaps, llms.txt and Markdown versions of pages.</p>`, user, 200, {}, true);
+<p class="note">Bots are seen when a collector is in front of the site (every request) or when they run the script. Verified means the platform confirmed the bot's identity; the others are identified by user agent only. Special files are robots.txt, sitemaps, llms.txt and Markdown versions of pages. "Other" are page views whose user agent looks like a browser but that never ran the script nor loaded the noscript pixel: almost always bots, so they are not counted as visitors.</p>${raw(partial(data.truncated))}`, user, 200, {}, true);
       }
 
       if (eventName) {
@@ -427,7 +427,7 @@ ${raw(stat(number(t.visitors), 'visitors', `${number(t.stableVisitors)} recogniz
 ${raw(stat(number(t.sessions), 'sessions'))}
 ${raw(stat(number(t.pageViews), 'page views'))}
 ${raw(stat(duration(t.avgVisibleMs), 'visible time per page view', `Over ${number(t.timedPageViews)} page views with engagement data.`))}
-${raw(stat(number(t.bots), 'bot requests', 'Not included in any other number here.'))}
+${raw(stat(number(t.bots), 'bot requests', `Not included in any other number here. ${t.unconfirmed ? `Includes ${number(t.unconfirmed)} page views that never ran the script, counted as other bots.` : ''}`))}
 </div>
 <div class="grid" style="margin-top:12px">
 ${raw(card('Pages', bars(data.pages)))}
