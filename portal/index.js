@@ -4,6 +4,7 @@
 import { BANNER_TEXTS, TEXT_KEYS, bannerLanguages, bannerTexts } from '../collector/banner.js';
 import { CONSENT_REGIONS, consentSettings } from '../collector/consent.js';
 import { hashPassword, verifyPassword } from './auth.js';
+import { FAVICON, MARK } from './brand.js';
 import { HOSTS, WAYS, checkInstall, installSteps } from './install.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -15,7 +16,7 @@ const CSS = `
 @media (prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--muted:#999;--line:#333;--card:#1a1a1a;--accent:#7aa2ff;--danger:#ff8a80}}
 *{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line)}
-header a{color:inherit;text-decoration:none;font-weight:600}main{max-width:760px;margin:0 auto;padding:24px 20px}
+header a{color:inherit;text-decoration:none;font-weight:600}header>a{display:inline-flex;align-items:center;gap:8px}main{max-width:760px;margin:0 auto;padding:24px 20px}
 h1{font-size:22px;margin:0 0 16px}h2{font-size:17px;margin:28px 0 8px}.muted{color:var(--muted)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin:12px 0}
 label{display:block;margin:12px 0 4px;font-weight:600}input,textarea,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:inherit;font:inherit}
@@ -59,8 +60,8 @@ export function createPortal({ store, queries, basePath = '/portal', collectorPa
 
   const page = (title, body, user, status = 200, headers = {}, wide = false) => new Response(html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} · Tinybeam</title><style>${raw(CSS)}</style></head><body>
-<header><a href="${url('/')}">Tinybeam</a>${raw(user ? html`<form method="post" action="${url('/logout')}"><span class="muted">${user.email}</span> &nbsp;<button class="link">Sign out</button></form>` : '')}</header>
+<title>${title} · Tinybeam</title><link rel="icon" href="${FAVICON}" type="image/svg+xml"><style>${raw(CSS)}</style></head><body>
+<header><a href="${url('/')}">${raw(MARK)}Tinybeam</a>${raw(user ? html`<form method="post" action="${url('/logout')}"><span class="muted">${user.email}</span> &nbsp;<button class="link">Sign out</button></form>` : '')}</header>
 <main class="${wide ? 'wide' : ''}">${raw(body)}</main></body></html>`, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', ...headers } });
 
   const redirect = (path, headers = {}) => new Response(null, { status: 303, headers: { Location: url(path), ...headers } });

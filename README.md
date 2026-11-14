@@ -1,4 +1,10 @@
-# Tinybeam
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mathiasbarea/tinybeam/main/docs/brand/mark-on-dark.svg">
+    <img src="https://raw.githubusercontent.com/mathiasbarea/tinybeam/main/docs/brand/mark-on-light.svg" alt="" width="40" height="40" align="center">
+  </picture>
+  Tinybeam
+</h1>
 
 **Web analytics that sees the AI side of your traffic.** The crawlers reading your site, the visitors AI
 assistants send you, every bot by name and the visits that never run JavaScript, from a first-party script
