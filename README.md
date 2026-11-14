@@ -1,6 +1,8 @@
 # Tinybeam
 
-First-party web analytics that weighs almost nothing.
+**Web analytics that sees the AI side of your traffic.** The crawlers reading your site, the visitors AI
+assistants send you, every bot by name and the visits that never run JavaScript, from a first-party script
+of 1.5 KB.
 
 Tinybeam is a tiny browser script plus a collector you can run anywhere. The script measures what people
 actually do on a page and sends it to the collector; the collector enriches the events, stores them and
