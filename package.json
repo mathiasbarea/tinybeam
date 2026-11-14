@@ -1,18 +1,49 @@
 {
   "name": "tinybeam",
-  "version": "0.0.0",
-  "private": true,
-  "description": "First-party web analytics that weighs almost nothing: a tiny browser script and a portable collector.",
+  "version": "0.1.0",
+  "description": "Web analytics that sees the AI side of your traffic: AI crawlers, visits from AI assistants, every bot by name and no-JavaScript visits, from a 1.5 KB first-party script.",
+  "keywords": [
+    "analytics",
+    "web-analytics",
+    "privacy",
+    "first-party",
+    "ai-crawlers",
+    "bots",
+    "geo",
+    "seo",
+    "cloudflare-workers",
+    "d1",
+    "sqlite"
+  ],
+  "homepage": "https://github.com/mathiasbarea/tinybeam#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mathiasbarea/tinybeam.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mathiasbarea/tinybeam/issues"
+  },
   "license": "MIT",
   "type": "module",
-  "files": ["app.js", "build.mjs", "collector", "portal", "src", "dist", "examples", "docs"],
+  "files": [
+    "app.js",
+    "build.mjs",
+    "collector",
+    "portal",
+    "src",
+    "dist/tinybeam.js",
+    "dist/tinybeam-ids.js",
+    "examples",
+    "docs"
+  ],
   "scripts": {
     "build": "node build.mjs",
     "size": "node build.mjs --check",
     "test": "node --test",
     "prepare": "node build.mjs",
     "site-id": "node --input-type=module -e \"import { newSiteId } from './collector/index.js'; console.log(newSiteId())\"",
-    "start": "node build.mjs && node examples/node-server.js"
+    "start": "node build.mjs && node examples/node-server.js",
+    "prepack": "node build.mjs --check"
   },
   "devDependencies": {
     "acorn": "^8.19.0",
